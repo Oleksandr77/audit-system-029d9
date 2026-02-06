@@ -200,7 +200,7 @@ async function llmTranslateStrict(text, source, target) {
   if (!text || source === target) return text || ''
   try {
     const { data, error } = await callWithTimeout(
-      supabase.functions.invoke('llm-translator', {
+      supabase.functions.invoke('smart-api', {
         body: {
           mode: 'translate',
           source_language: source,
@@ -225,7 +225,7 @@ async function llmSuggestCompletions(prefix, language) {
   if (!prefix || prefix.trim().length < 3) return []
   try {
     const { data, error } = await callWithTimeout(
-      supabase.functions.invoke('llm-translator', {
+      supabase.functions.invoke('smart-api', {
         body: {
           mode: 'suggest',
           language,
@@ -717,7 +717,7 @@ function Comments({ document, canComment, canView, displayLanguage }) {
       source_language: sourceLanguage,
       translated_pl: translatedPl,
       translated_uk: translatedUk,
-      translation_provider: 'llm-translator',
+      translation_provider: 'smart-api',
       parent_comment_id: replyTo,
       visible_to_sides: profile.side === 'FNU' ? ['FNU'] : ['FNU', 'OPERATOR']
     }).select().single()
@@ -995,7 +995,7 @@ function Chat({ displayLanguageMode, onDisplayLanguageModeChange }) {
       source_language: sourceLanguage,
       translated_pl: translatedPl,
       translated_uk: translatedUk,
-      translation_provider: 'llm-translator'
+      translation_provider: 'smart-api'
     })
 
     if (!error) {
