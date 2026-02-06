@@ -220,7 +220,7 @@ async function llmTranslateStrict(text, source, target) {
   }
 }
 
-async function llmSuggestCompletions(prefix, language) {
+async function llmSuggestCompletions(prefix, language, context = '') {
   // Expected Edge Function contract: { suggestions: string[] }
   if (!prefix || prefix.trim().length < 3) return []
   try {
@@ -230,9 +230,10 @@ async function llmSuggestCompletions(prefix, language) {
           mode: 'suggest',
           language,
           text: prefix.trim(),
+          context: sanitizeText(context || ''),
           max_items: MAX_LLM_SUGGESTIONS,
           strict: true,
-          system_instruction: 'Return 1-3 short continuation options in the same language. No extra commentary.'
+          system_instruction: 'Return 1-3 short continuation options in the same language, based on provided context. No extra commentary.'
         }
       }),
       TRANSLATION_TIMEOUT_MS
@@ -799,15 +800,31 @@ function Comments({ document, canComment, canView, displayLanguage }) {
 // =====================================================
 // CHAT COMPONENT (SECURE + AUTO TRANSLATION)
 // =====================================================
-function Chat({ displayLanguageMode, onDisplayLanguageModeChange }) {
+function Chat({
+  displayLanguageMode,
+  onDisplayLanguageModeChange,
+  contextHint,
+  companies = [],
+  selectedCompanyId,
+  activeSectionId
+}) {
   const [messages, setMessages] = useState([])
+  const [attachmentsByMessage, setAttachmentsByMessage] = useState({})
   const [users, setUsers] = useState([])
   const [selectedUser, setSelectedUser] = useState(null)
   const [newMessage, setNewMessage] = useState('')
+  const [pendingFiles, setPendingFiles] = useState([])
   const [llmSuggestions, setLlmSuggestions] = useState([])
   const [loadingSuggestions, setLoadingSuggestions] = useState(false)
+  const [chatSize, setChatSize] = useState('regular')
   const [sending, setSending] = useState(false)
   const [userSearch, setUserSearch] = useState('')
+  const [targetCompanyId, setTargetCompanyId] = useState(selectedCompanyId || '')
+  const [targetSectionId, setTargetSectionId] = useState(activeSectionId || '')
+  const [targetDocumentId, setTargetDocumentId] = useState('')
+  const [targetSections, setTargetSections] = useState([])
+  const [targetDocuments, setTargetDocuments] = useState([])
+  const fileInputRef = useRef(null)
   const debouncedSearch = useDebounce(userSearch, 300)
   const debouncedMessage = useDebounce(newMessage, 350)
   const lastMessageTime = useRef(0)
@@ -820,6 +837,14 @@ function Chat({ displayLanguageMode, onDisplayLanguageModeChange }) {
     () => resolveLanguageMode(displayLanguageMode, profile?.side),
     [displayLanguageMode, profile?.side]
   )
+
+  useEffect(() => {
+    if (selectedCompanyId) setTargetCompanyId(selectedCompanyId)
+  }, [selectedCompanyId])
+
+  useEffect(() => {
+    if (activeSectionId) setTargetSectionId(activeSectionId)
+  }, [activeSectionId])
 
   // Load users with search
   useEffect(() => {
@@ -870,6 +895,77 @@ function Chat({ displayLanguageMode, onDisplayLanguageModeChange }) {
     }
   }, [users, selectedUser])
 
+  useEffect(() => {
+    const loadSections = async () => {
+      if (!targetCompanyId || !isValidUUID(targetCompanyId)) {
+        safeSetState(setTargetSections)([])
+        return
+      }
+      const { data } = await supabase
+        .from('document_sections')
+        .select('id, code, name_pl, name_uk')
+        .eq('company_id', targetCompanyId)
+        .is('parent_section_id', null)
+        .order('order_index')
+      safeSetState(setTargetSections)(data || [])
+      if ((!targetSectionId || !data?.some(s => s.id === targetSectionId)) && data?.length > 0) {
+        setTargetSectionId(data[0].id)
+      }
+    }
+    loadSections()
+  }, [targetCompanyId, targetSectionId, safeSetState])
+
+  useEffect(() => {
+    const loadDocumentsForTarget = async () => {
+      if (!targetSectionId || !isValidUUID(targetSectionId)) {
+        safeSetState(setTargetDocuments)([])
+        return
+      }
+      const { data: subSections } = await supabase
+        .from('document_sections')
+        .select('id')
+        .eq('parent_section_id', targetSectionId)
+      const sectionIds = [targetSectionId, ...(subSections || []).map(s => s.id)]
+      const { data } = await supabase
+        .from('documents')
+        .select('id, code, name_pl, name_uk')
+        .in('section_id', sectionIds)
+        .order('order_index')
+
+      safeSetState(setTargetDocuments)(data || [])
+      if ((!targetDocumentId || !data?.some(d => d.id === targetDocumentId)) && data?.length > 0) {
+        setTargetDocumentId(data[0].id)
+      }
+    }
+    loadDocumentsForTarget()
+  }, [targetSectionId, targetDocumentId, safeSetState])
+
+  const loadAttachments = useCallback(async (messageList) => {
+    const ids = (messageList || []).map(m => m.id).filter(isValidUUID)
+    if (ids.length === 0) {
+      safeSetState(setAttachmentsByMessage)({})
+      return
+    }
+
+    const { data, error } = await supabase
+      .from('chat_attachments')
+      .select('*')
+      .in('message_id', ids)
+      .order('created_at', { ascending: true })
+    if (error) {
+      safeSetState(setAttachmentsByMessage)({})
+      return
+    }
+
+    const grouped = (data || []).reduce((acc, item) => {
+      if (!acc[item.message_id]) acc[item.message_id] = []
+      acc[item.message_id].push(item)
+      return acc
+    }, {})
+
+    safeSetState(setAttachmentsByMessage)(grouped)
+  }, [safeSetState])
+
   // SECURE: Load messages WITHOUT SQL interpolation
   const loadMessages = useCallback(async () => {
     if (!selectedUser || !profile?.id) return
@@ -900,6 +996,7 @@ function Chat({ displayLanguageMode, onDisplayLanguageModeChange }) {
     ].sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
 
     safeSetState(setMessages)(allMessages)
+    loadAttachments(allMessages)
 
     // Mark as read
     if (receivedResult.data && receivedResult.data.length > 0) {
@@ -911,7 +1008,7 @@ function Chat({ displayLanguageMode, onDisplayLanguageModeChange }) {
           .in('id', unreadIds)
       }
     }
-  }, [selectedUser, profile?.id, safeSetState])
+  }, [selectedUser, profile?.id, safeSetState, loadAttachments])
 
   // Realtime subscription
   useEffect(() => {
@@ -950,17 +1047,100 @@ function Chat({ displayLanguageMode, onDisplayLanguageModeChange }) {
         safeSetState(setLlmSuggestions)([])
         return
       }
+      const recentMessagesContext = messages
+        .slice(-6)
+        .map((m) => `${m.sender?.full_name || m.sender?.email || 'User'}: ${resolveDisplayedText(m, displayLanguage)}`)
+        .join('\n')
+      const fullContext = [contextHint || '', recentMessagesContext].filter(Boolean).join('\n')
       safeSetState(setLoadingSuggestions)(true)
-      const suggestions = await llmSuggestCompletions(debouncedMessage, detectLanguage(debouncedMessage))
+      const suggestions = await llmSuggestCompletions(
+        debouncedMessage,
+        detectLanguage(debouncedMessage),
+        fullContext
+      )
       safeSetState(setLlmSuggestions)(suggestions)
       safeSetState(setLoadingSuggestions)(false)
     }
     loadSuggestions()
-  }, [debouncedMessage, selectedUser, safeSetState])
+  }, [debouncedMessage, selectedUser, safeSetState, messages, displayLanguage, contextHint])
+
+  const onPickFiles = (e) => {
+    const picked = Array.from(e.target.files || [])
+    const valid = []
+    for (const file of picked) {
+      const result = validateFile(file)
+      if (!result.valid) {
+        addToast(result.error, 'error')
+        continue
+      }
+      valid.push(file)
+    }
+    setPendingFiles(prev => [...prev, ...valid].slice(0, 10))
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const removePendingFile = (name) => {
+    setPendingFiles(prev => prev.filter(f => f.name !== name))
+  }
+
+  const uploadAttachmentsForMessage = async (messageId) => {
+    if (pendingFiles.length === 0) return
+    if (!targetCompanyId || !targetSectionId || !targetDocumentId) {
+      throw new Error('Wybierz firmę, sekcję i dokument / Виберіть компанію, секцію та документ')
+    }
+
+    for (const file of pendingFiles) {
+      const ext = getFileExtension(file.name)
+      const safeFileName = sanitizeFileName(file.name)
+      const filePath = `chat/${targetCompanyId}/${targetSectionId}/${targetDocumentId}/${messageId}/${safeFileName}`
+
+      const { error: uploadError } = await supabase.storage.from('documents').upload(filePath, file)
+      if (uploadError) throw uploadError
+
+      const { error: dbError } = await supabase.from('chat_attachments').insert({
+        message_id: messageId,
+        sender_id: profile.id,
+        recipient_id: selectedUser,
+        company_id: targetCompanyId,
+        section_id: targetSectionId,
+        document_id: targetDocumentId,
+        file_name: sanitizeText(file.name),
+        file_path: filePath,
+        file_size: file.size,
+        file_type: ext,
+        mime_type: file.type
+      })
+      if (dbError) {
+        await supabase.storage.from('documents').remove([filePath])
+        throw dbError
+      }
+
+      await logAudit(profile.id, 'upload_file', 'chat_attachment', messageId, { file_name: file.name })
+    }
+
+    await supabase.from('chat_messages').update({ has_attachments: true }).eq('id', messageId)
+  }
+
+  const openAttachment = async (attachment) => {
+    const { data } = await supabase.storage.from('documents').createSignedUrl(attachment.file_path, 3600)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank', 'noopener,noreferrer')
+  }
+
+  const downloadAttachment = async (attachment) => {
+    const { data } = await supabase.storage.from('documents').download(attachment.file_path)
+    if (data) {
+      const url = URL.createObjectURL(data)
+      const a = window.document.createElement('a')
+      a.href = url
+      a.download = attachment.file_name
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 10000)
+    }
+  }
 
   const sendMessage = async (e) => {
     e.preventDefault()
-    if (!newMessage.trim() || !selectedUser) return
+    if ((!newMessage.trim() && pendingFiles.length === 0) || !selectedUser) return
 
     // Rate limiting
     const now = Date.now()
@@ -975,7 +1155,7 @@ function Chat({ displayLanguageMode, onDisplayLanguageModeChange }) {
       return
     }
 
-    const messageContent = sanitizeText(newMessage.trim())
+    const messageContent = sanitizeText(newMessage.trim() || (pendingFiles.length > 0 ? '📎 Attachment' : ''))
     if (messageContent.length > MAX_MESSAGE_LENGTH) {
       addToast(`Maksymalnie ${MAX_MESSAGE_LENGTH} znaków`, 'error')
       return
@@ -988,34 +1168,47 @@ function Chat({ displayLanguageMode, onDisplayLanguageModeChange }) {
       sourceLanguage === 'uk' ? Promise.resolve(messageContent) : llmTranslateStrict(messageContent, sourceLanguage, 'uk')
     ])
 
-    const { error } = await supabase.from('chat_messages').insert({
-      sender_id: profile.id,
-      recipient_id: selectedUser,
-      content: messageContent,
-      source_language: sourceLanguage,
-      translated_pl: translatedPl,
-      translated_uk: translatedUk,
-      translation_provider: 'smart-api'
-    })
+    try {
+      const { data: createdMessage, error } = await supabase.from('chat_messages').insert({
+        sender_id: profile.id,
+        recipient_id: selectedUser,
+        content: messageContent,
+        source_language: sourceLanguage,
+        translated_pl: translatedPl,
+        translated_uk: translatedUk,
+        translation_provider: 'smart-api',
+        has_attachments: pendingFiles.length > 0
+      }).select().single()
 
-    if (!error) {
+      if (error || !createdMessage?.id) throw error || new Error('Message not created')
+
+      if (pendingFiles.length > 0) await uploadAttachmentsForMessage(createdMessage.id)
       setNewMessage('')
       setLlmSuggestions([])
+      setPendingFiles([])
       loadMessages()
-    } else {
+    } catch (err) {
       addToast('Błąd wysyłania / Помилка надсилання', 'error')
+      console.error('Send message error:', err)
     }
     setSending(false)
   }
 
   return (
-    <div className="chat-panel" role="region" aria-label="Czat / Чат">
+    <div className={`chat-panel chat-size-${chatSize}`} role="region" aria-label="Czat / Чат">
       <div className="chat-header">
         <div className="chat-title-stack">
           <BiText pl="Czat (aktywny)" uk="Чат (активний)" />
           <small>LLM Translator only: PL ↔ UK</small>
+          {contextHint && <small className="chat-context">Context: <SafeText>{contextHint}</SafeText></small>}
         </div>
         <div className="chat-language-controls">
+          <label htmlFor="chat-size-mode">Widok</label>
+          <select id="chat-size-mode" value={chatSize} onChange={e => setChatSize(e.target.value)}>
+            <option value="compact">Compact</option>
+            <option value="regular">Regular</option>
+            <option value="expanded">Expanded</option>
+          </select>
           <label htmlFor="chat-language-mode">Język / Мова</label>
           <select
             id="chat-language-mode"
@@ -1056,7 +1249,12 @@ function Chat({ displayLanguageMode, onDisplayLanguageModeChange }) {
                 <span className={`side-badge ${u.side?.toLowerCase()}`}>{u.side}</span>
               </button>
             ))}
-            {users.length === 0 && <div className="no-contacts"><BiText pl="Brak kontaktów" uk="Немає контактів" /></div>}
+            {users.length === 0 && (
+              <div className="no-contacts">
+                <BiText pl="Brak kontaktów" uk="Немає контактів" />
+                <small>Dodaj drugiego użytkownika, aby rozpocząć chat / Додайте ще одного користувача для чату</small>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1080,11 +1278,52 @@ function Chat({ displayLanguageMode, onDisplayLanguageModeChange }) {
                     {m.source_language && m.source_language !== displayLanguage && (
                       <span className="message-translation-meta">LLM translate: {m.source_language.toUpperCase()} → {displayLanguage.toUpperCase()}</span>
                     )}
+                    {(attachmentsByMessage[m.id] || []).length > 0 && (
+                      <div className="message-attachments">
+                        {(attachmentsByMessage[m.id] || []).map(att => (
+                          <div key={att.id} className="message-attachment-card">
+                            <span className="attachment-name"><SafeText>{att.file_name}</SafeText></span>
+                            <span className="attachment-meta">{(att.file_size / 1024 / 1024).toFixed(2)} MB</span>
+                            <div className="attachment-actions">
+                              <button type="button" onClick={() => openAttachment(att)}>👁️</button>
+                              <button type="button" onClick={() => downloadAttachment(att)}>⬇️</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <time className="message-time" dateTime={m.created_at}>{new Date(m.created_at).toLocaleString()}</time>
                   </div>
                 ))}
                 <div ref={messagesEndRef} />
               </div>
+              <div className="attachment-target">
+                <select value={targetCompanyId} onChange={e => setTargetCompanyId(e.target.value)} aria-label="Firma">
+                  <option value="">Firma / Компанія</option>
+                  {companies.map(c => <option key={c.id} value={c.id}>{c.name_pl || c.name}</option>)}
+                </select>
+                <select value={targetSectionId} onChange={e => setTargetSectionId(e.target.value)} aria-label="Sekcja">
+                  <option value="">Sekcja / Секція</option>
+                  {targetSections.map(s => <option key={s.id} value={s.id}>{s.code} {s.name_pl}</option>)}
+                </select>
+                <select value={targetDocumentId} onChange={e => setTargetDocumentId(e.target.value)} aria-label="Dokument">
+                  <option value="">Dokument / Документ</option>
+                  {targetDocuments.map(d => <option key={d.id} value={d.id}>{d.code} {d.name_pl}</option>)}
+                </select>
+                <label className="chat-attach-btn">
+                  📎
+                  <input ref={fileInputRef} type="file" multiple onChange={onPickFiles} style={{ display: 'none' }} />
+                </label>
+              </div>
+              {pendingFiles.length > 0 && (
+                <div className="pending-files">
+                  {pendingFiles.map(file => (
+                    <button key={file.name + file.size} type="button" onClick={() => removePendingFile(file.name)}>
+                      <SafeText>{file.name}</SafeText> ✕
+                    </button>
+                  ))}
+                </div>
+              )}
               <form onSubmit={sendMessage} className="message-form">
                 <input
                   value={newMessage}
@@ -1093,7 +1332,7 @@ function Chat({ displayLanguageMode, onDisplayLanguageModeChange }) {
                   maxLength={MAX_MESSAGE_LENGTH}
                   aria-label="Treść wiadomości"
                 />
-                <button type="submit" disabled={sending || !newMessage.trim()} aria-label="Wyślij wiadomość">📤</button>
+                <button type="submit" disabled={sending || (!newMessage.trim() && pendingFiles.length === 0)} aria-label="Wyślij wiadomość">📤</button>
               </form>
               <div className="llm-suggestions" aria-live="polite">
                 <span className="llm-label">LLM T9</span>
@@ -1819,7 +2058,20 @@ function AppContent() {
           </ErrorBoundary>
         )}
         <ErrorBoundary>
-          <Chat displayLanguageMode={chatLanguageMode} onDisplayLanguageModeChange={setChatLanguageMode} />
+          <Chat
+            displayLanguageMode={chatLanguageMode}
+            onDisplayLanguageModeChange={setChatLanguageMode}
+            contextHint={
+              selectedDocument
+                ? `${selectedDocument.code} ${selectedDocument.name_pl}`
+                : activeSection
+                  ? `${activeSection.code} ${activeSection.name_pl}`
+                  : ''
+            }
+            companies={companies}
+            selectedCompanyId={selectedCompany?.id}
+            activeSectionId={activeSection?.id}
+          />
         </ErrorBoundary>
       </div>
     </ProfileContext.Provider>
