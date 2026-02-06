@@ -337,7 +337,7 @@ body {
    ===================================================== */
 .app main {
   padding: 1.5rem;
-  padding-bottom: min(52vh, 520px);
+  padding-bottom: min(46vh, 430px);
 }
 
 .section-header {
@@ -776,11 +776,11 @@ body {
    ===================================================== */
 .chat-panel {
   position: fixed;
-  left: 1rem;
-  right: 1rem;
-  bottom: 1rem;
-  height: min(48vh, 460px);
-  max-width: 1280px;
+  left: 0.75rem;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  height: min(42vh, 390px);
+  max-width: 1180px;
   margin: 0 auto;
   background: rgba(255, 255, 255, 0.97);
   border: 1px solid rgba(23, 68, 84, 0.18);
@@ -790,6 +790,18 @@ body {
   flex-direction: column;
   z-index: 1005;
   overflow: hidden;
+}
+
+.chat-panel.chat-size-compact {
+  height: min(26vh, 250px);
+}
+
+.chat-panel.chat-size-regular {
+  height: min(42vh, 390px);
+}
+
+.chat-panel.chat-size-expanded {
+  height: min(66vh, 700px);
 }
 
 .chat-header {
@@ -812,11 +824,22 @@ body {
   opacity: 0.9;
 }
 
+.chat-title-stack .chat-context {
+  font-size: 0.68rem;
+  opacity: 0.9;
+  max-width: 450px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .chat-language-controls {
   display: flex;
   align-items: center;
   gap: 0.45rem;
   font-size: 0.8rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .chat-language-controls label {
@@ -852,7 +875,7 @@ body {
 }
 
 .chat-users {
-  width: 220px;
+  width: 210px;
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -894,6 +917,12 @@ body {
   text-align: center;
   color: var(--text-muted);
   font-size: 0.85rem;
+}
+
+.no-contacts small {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: 0.72rem;
 }
 
 .chat-messages {
@@ -949,6 +978,94 @@ body {
   font-size: 0.68rem;
   margin-top: 0.4rem;
   opacity: 0.75;
+}
+
+.message-attachments {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.55rem;
+}
+
+.message-attachment-card {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.message.received .message-attachment-card {
+  background: var(--bg);
+}
+
+.attachment-name {
+  flex: 1;
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-meta {
+  font-size: 0.66rem;
+  opacity: 0.75;
+}
+
+.attachment-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.attachment-actions button {
+  border: none;
+  border-radius: 6px;
+  padding: 0.15rem 0.35rem;
+  cursor: pointer;
+}
+
+.attachment-target {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr auto;
+  gap: 0.45rem;
+  padding: 0.55rem 0.9rem;
+  border-top: 1px solid var(--border);
+  background: #fff;
+}
+
+.attachment-target select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.38rem 0.45rem;
+  font-size: 0.78rem;
+  min-width: 0;
+}
+
+.chat-attach-btn {
+  align-self: center;
+  border: 1px dashed var(--primary);
+  border-radius: 8px;
+  padding: 0.38rem 0.62rem;
+  cursor: pointer;
+  background: rgba(255, 122, 89, 0.07);
+}
+
+.pending-files {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0 0.9rem 0.5rem;
+  flex-wrap: wrap;
+  background: #fff;
+}
+
+.pending-files button {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+  cursor: pointer;
 }
 
 .message-form {
@@ -1466,15 +1583,16 @@ body {
   .user-form .form-grid { grid-template-columns: 1fr; }
   .doc-item { flex-wrap: wrap; }
 
-  .app main { padding-bottom: 58vh; }
+  .app main { padding-bottom: 52vh; }
   .chat-panel {
     left: 0.5rem;
     right: 0.5rem;
     bottom: 0.5rem;
-    height: 56vh;
+    height: 52vh;
   }
   .chat-users { width: 145px; }
   .chat-language-controls label { display: none; }
+  .attachment-target { grid-template-columns: 1fr 1fr; }
 
   .modal { max-width: 95vw; }
   .modal.wide { max-width: 95vw; }
@@ -1488,9 +1606,10 @@ body {
   .chat-panel {
     left: 0.35rem;
     right: 0.35rem;
-    height: 60vh;
+    height: 58vh;
   }
   .chat-users { display: none; }
   .chat-title-stack small { display: none; }
   .chat-language-controls { gap: 0.35rem; }
+  .attachment-target { grid-template-columns: 1fr; }
 }
