@@ -28,8 +28,13 @@ const MAX_FILE_SIZE = 100 * 1024 * 1024
 const MAX_FILES_PER_DOC = 100
 const MAX_COMMENT_LENGTH = 500
 const MAX_MESSAGE_LENGTH = 500
+const MAX_LLM_SUGGESTIONS = 3
 const RATE_LIMIT_MS = 1000
 const USERS_PAGE_SIZE = 20
+
+const LANGUAGE_MODES = ['auto', 'pl', 'uk']
+const SIDE_DEFAULT_LANGUAGE = { FNU: 'uk', OPERATOR: 'pl' }
+const TRANSLATION_TIMEOUT_MS = 6000
 
 const ALLOWED_FILE_TYPES = [
   'application/pdf',
@@ -166,6 +171,89 @@ function validateFile(file) {
     return { valid: false, error: 'Niedozwolony typ pliku / Недозволений тип файлу' }
   }
   return { valid: true }
+}
+
+function detectLanguage(text) {
+  if (!text || typeof text !== 'string') return 'uk'
+  const sample = text.toLowerCase()
+  const ukMatch = sample.match(/[іїєґ]/g)?.length || 0
+  const plMatch = sample.match(/[ąćęłńóśźż]/g)?.length || 0
+  if (ukMatch > plMatch) return 'uk'
+  if (plMatch > ukMatch) return 'pl'
+  return 'uk'
+}
+
+function resolveLanguageMode(mode, profileSide) {
+  if (mode === 'pl' || mode === 'uk') return mode
+  return SIDE_DEFAULT_LANGUAGE[profileSide] || 'uk'
+}
+
+async function callWithTimeout(promise, timeoutMs) {
+  return await Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeoutMs))
+  ])
+}
+
+async function llmTranslateStrict(text, source, target) {
+  // Expected Edge Function contract: { translated_text: string }
+  if (!text || source === target) return text || ''
+  try {
+    const { data, error } = await callWithTimeout(
+      supabase.functions.invoke('llm-translator', {
+        body: {
+          mode: 'translate',
+          source_language: source,
+          target_language: target,
+          text,
+          strict: true,
+          system_instruction: 'Translate only. No explanations. Preserve names, dates, numbers and punctuation. Output only translated text.'
+        }
+      }),
+      TRANSLATION_TIMEOUT_MS
+    )
+    if (error) throw error
+    const translated = sanitizeText(data?.translated_text || '')
+    return translated || text
+  } catch {
+    return text
+  }
+}
+
+async function llmSuggestCompletions(prefix, language) {
+  // Expected Edge Function contract: { suggestions: string[] }
+  if (!prefix || prefix.trim().length < 3) return []
+  try {
+    const { data, error } = await callWithTimeout(
+      supabase.functions.invoke('llm-translator', {
+        body: {
+          mode: 'suggest',
+          language,
+          text: prefix.trim(),
+          max_items: MAX_LLM_SUGGESTIONS,
+          strict: true,
+          system_instruction: 'Return 1-3 short continuation options in the same language. No extra commentary.'
+        }
+      }),
+      TRANSLATION_TIMEOUT_MS
+    )
+    if (error) throw error
+    const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : []
+    return suggestions.map(s => sanitizeText(String(s))).filter(Boolean).slice(0, MAX_LLM_SUGGESTIONS)
+  } catch {
+    return []
+  }
+}
+
+function resolveDisplayedText(item, displayLanguage) {
+  const source = item?.source_language || detectLanguage(item?.content || '')
+  const content = item?.content || ''
+  if (displayLanguage === 'pl') {
+    if (source === 'pl') return content
+    return item?.translated_pl || content
+  }
+  if (source === 'uk') return content
+  return item?.translated_uk || content
 }
 
 // =====================================================
@@ -548,8 +636,9 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
 // =====================================================
 // COMMENT ITEM COMPONENT (Memoized for performance)
 // =====================================================
-const CommentItem = ({ comment, depth, maxDepth, onReply, onToggleVisibility, canComment, canToggle }) => {
+const CommentItem = ({ comment, depth, maxDepth, onReply, onToggleVisibility, canComment, canToggle, displayLanguage }) => {
   if (depth >= maxDepth) return null
+  const renderedContent = resolveDisplayedText(comment, displayLanguage)
 
   return (
     <div className={`comment ${depth > 0 ? 'reply' : ''}`} style={{ marginLeft: depth * 16 }}>
@@ -560,7 +649,10 @@ const CommentItem = ({ comment, depth, maxDepth, onReply, onToggleVisibility, ca
         </span>
         <time dateTime={comment.created_at}>{new Date(comment.created_at).toLocaleString()}</time>
       </div>
-      <p className="comment-content"><SafeText>{comment.content}</SafeText></p>
+      <p className="comment-content"><SafeText>{renderedContent}</SafeText></p>
+      {comment.source_language && comment.source_language !== displayLanguage && (
+        <p className="comment-meta">LLM translate: {comment.source_language.toUpperCase()} → {displayLanguage.toUpperCase()}</p>
+      )}
       <div className="comment-actions">
         {canComment && depth < maxDepth - 1 && (
           <button onClick={() => onReply(comment.id)} aria-label="Odpowiedz / Відповісти">↩️ Odpowiedz</button>
@@ -578,7 +670,7 @@ const CommentItem = ({ comment, depth, maxDepth, onReply, onToggleVisibility, ca
 // =====================================================
 // COMMENTS COMPONENT
 // =====================================================
-function Comments({ document, canComment, canView }) {
+function Comments({ document, canComment, canView, displayLanguage }) {
   const [comments, setComments] = useState([])
   const [newComment, setNewComment] = useState('')
   const [replyTo, setReplyTo] = useState(null)
@@ -587,6 +679,7 @@ function Comments({ document, canComment, canView }) {
   const profile = useProfile()
   const safeSetState = useSafeAsync()
   const MAX_REPLY_DEPTH = 5
+  const resolvedDisplayLanguage = displayLanguage === 'pl' ? 'pl' : 'uk'
 
   const loadComments = useCallback(async () => {
     if (!document?.id) return
@@ -610,11 +703,21 @@ function Comments({ document, canComment, canView }) {
     e.preventDefault()
     if (!newComment.trim() || newComment.length > MAX_COMMENT_LENGTH) return
     setSubmitting(true)
+    const cleanContent = sanitizeText(newComment.trim())
+    const sourceLanguage = detectLanguage(cleanContent)
+    const [translatedPl, translatedUk] = await Promise.all([
+      sourceLanguage === 'pl' ? Promise.resolve(cleanContent) : llmTranslateStrict(cleanContent, sourceLanguage, 'pl'),
+      sourceLanguage === 'uk' ? Promise.resolve(cleanContent) : llmTranslateStrict(cleanContent, sourceLanguage, 'uk')
+    ])
 
     const { data, error } = await supabase.from('comments').insert({
       document_id: document.id,
       author_id: profile.id,
-      content: sanitizeText(newComment.trim()),
+      content: cleanContent,
+      source_language: sourceLanguage,
+      translated_pl: translatedPl,
+      translated_uk: translatedUk,
+      translation_provider: 'llm-translator',
       parent_comment_id: replyTo,
       visible_to_sides: profile.side === 'FNU' ? ['FNU'] : ['FNU', 'OPERATOR']
     }).select().single()
@@ -651,6 +754,7 @@ function Comments({ document, canComment, canView }) {
         onToggleVisibility={toggleVisibility}
         canComment={canComment}
         canToggle={profile?.role === 'super_admin'}
+        displayLanguage={resolvedDisplayLanguage}
       />
       {getReplies(comment.id).map(r => renderCommentTree(r, depth + 1))}
     </div>
@@ -693,22 +797,29 @@ function Comments({ document, canComment, canView }) {
 }
 
 // =====================================================
-// CHAT COMPONENT (SECURE - No SQL Interpolation)
+// CHAT COMPONENT (SECURE + AUTO TRANSLATION)
 // =====================================================
-function Chat({ onClose }) {
+function Chat({ displayLanguageMode, onDisplayLanguageModeChange }) {
   const [messages, setMessages] = useState([])
   const [users, setUsers] = useState([])
   const [selectedUser, setSelectedUser] = useState(null)
   const [newMessage, setNewMessage] = useState('')
+  const [llmSuggestions, setLlmSuggestions] = useState([])
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false)
   const [sending, setSending] = useState(false)
   const [userSearch, setUserSearch] = useState('')
   const debouncedSearch = useDebounce(userSearch, 300)
+  const debouncedMessage = useDebounce(newMessage, 350)
   const lastMessageTime = useRef(0)
   const messagesEndRef = useRef(null)
   const channelRef = useRef(null)
   const addToast = useToast()
   const profile = useProfile()
   const safeSetState = useSafeAsync()
+  const displayLanguage = useMemo(
+    () => resolveLanguageMode(displayLanguageMode, profile?.side),
+    [displayLanguageMode, profile?.side]
+  )
 
   // Load users with search
   useEffect(() => {
@@ -752,6 +863,12 @@ function Chat({ onClose }) {
 
     loadUsers()
   }, [profile?.id, profile?.role, debouncedSearch, safeSetState])
+
+  useEffect(() => {
+    if (!selectedUser && users.length > 0) {
+      setSelectedUser(users[0].id)
+    }
+  }, [users, selectedUser])
 
   // SECURE: Load messages WITHOUT SQL interpolation
   const loadMessages = useCallback(async () => {
@@ -827,6 +944,20 @@ function Chat({ onClose }) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  useEffect(() => {
+    const loadSuggestions = async () => {
+      if (!debouncedMessage.trim() || !selectedUser) {
+        safeSetState(setLlmSuggestions)([])
+        return
+      }
+      safeSetState(setLoadingSuggestions)(true)
+      const suggestions = await llmSuggestCompletions(debouncedMessage, detectLanguage(debouncedMessage))
+      safeSetState(setLlmSuggestions)(suggestions)
+      safeSetState(setLoadingSuggestions)(false)
+    }
+    loadSuggestions()
+  }, [debouncedMessage, selectedUser, safeSetState])
+
   const sendMessage = async (e) => {
     e.preventDefault()
     if (!newMessage.trim() || !selectedUser) return
@@ -851,15 +982,25 @@ function Chat({ onClose }) {
     }
 
     setSending(true)
+    const sourceLanguage = detectLanguage(messageContent)
+    const [translatedPl, translatedUk] = await Promise.all([
+      sourceLanguage === 'pl' ? Promise.resolve(messageContent) : llmTranslateStrict(messageContent, sourceLanguage, 'pl'),
+      sourceLanguage === 'uk' ? Promise.resolve(messageContent) : llmTranslateStrict(messageContent, sourceLanguage, 'uk')
+    ])
 
     const { error } = await supabase.from('chat_messages').insert({
       sender_id: profile.id,
       recipient_id: selectedUser,
-      content: messageContent
+      content: messageContent,
+      source_language: sourceLanguage,
+      translated_pl: translatedPl,
+      translated_uk: translatedUk,
+      translation_provider: 'llm-translator'
     })
 
     if (!error) {
       setNewMessage('')
+      setLlmSuggestions([])
       loadMessages()
     } else {
       addToast('Błąd wysyłania / Помилка надсилання', 'error')
@@ -868,10 +1009,28 @@ function Chat({ onClose }) {
   }
 
   return (
-    <div className="chat-panel" role="dialog" aria-label="Czat / Чат" aria-modal="true">
+    <div className="chat-panel" role="region" aria-label="Czat / Чат">
       <div className="chat-header">
-        <BiText pl="Czat" uk="Чат" />
-        <button onClick={onClose} aria-label="Zamknij czat">✕</button>
+        <div className="chat-title-stack">
+          <BiText pl="Czat (aktywny)" uk="Чат (активний)" />
+          <small>LLM Translator only: PL ↔ UK</small>
+        </div>
+        <div className="chat-language-controls">
+          <label htmlFor="chat-language-mode">Język / Мова</label>
+          <select
+            id="chat-language-mode"
+            value={displayLanguageMode}
+            onChange={e => {
+              const nextMode = e.target.value
+              if (LANGUAGE_MODES.includes(nextMode)) onDisplayLanguageModeChange(nextMode)
+            }}
+          >
+            <option value="auto">Auto</option>
+            <option value="pl">Polski</option>
+            <option value="uk">Українська</option>
+          </select>
+          <span className="language-pill">{displayLanguage.toUpperCase()}</span>
+        </div>
       </div>
 
       <div className="chat-body">
@@ -917,7 +1076,10 @@ function Chat({ onClose }) {
                       <span className="message-sender"><SafeText>{m.sender?.full_name || m.sender?.email}</SafeText></span>
                       <span className={`side-badge ${m.sender?.side?.toLowerCase()}`}>{m.sender?.side}</span>
                     </div>
-                    <p className="message-content"><SafeText>{m.content}</SafeText></p>
+                    <p className="message-content"><SafeText>{resolveDisplayedText(m, displayLanguage)}</SafeText></p>
+                    {m.source_language && m.source_language !== displayLanguage && (
+                      <span className="message-translation-meta">LLM translate: {m.source_language.toUpperCase()} → {displayLanguage.toUpperCase()}</span>
+                    )}
                     <time className="message-time" dateTime={m.created_at}>{new Date(m.created_at).toLocaleString()}</time>
                   </div>
                 ))}
@@ -933,6 +1095,16 @@ function Chat({ onClose }) {
                 />
                 <button type="submit" disabled={sending || !newMessage.trim()} aria-label="Wyślij wiadomość">📤</button>
               </form>
+              <div className="llm-suggestions" aria-live="polite">
+                <span className="llm-label">LLM T9</span>
+                {loadingSuggestions ? (
+                  <span className="llm-hint">...</span>
+                ) : (
+                  llmSuggestions.map((hint, idx) => (
+                    <button key={idx} type="button" onClick={() => setNewMessage(hint)}>{hint}</button>
+                  ))
+                )}
+              </div>
             </>
           ) : (
             <div className="select-user"><BiText pl="Wybierz kontakt" uk="Виберіть контакт" /></div>
@@ -1169,7 +1341,7 @@ function AuditLog({ onClose }) {
 // =====================================================
 // DOCUMENT DETAIL MODAL
 // =====================================================
-function DocumentDetail({ document, onClose, onUpdate }) {
+function DocumentDetail({ document, onClose, onUpdate, displayLanguage }) {
   const [doc, setDoc] = useState(document)
   const [users, setUsers] = useState([])
   const modalRef = useRef(null)
@@ -1246,7 +1418,7 @@ function DocumentDetail({ document, onClose, onUpdate }) {
             <FileUpload document={doc} onUpdate={onUpdate} canAdd={canAdd} canDelete={canDelete} canView={canView} />
           </ErrorBoundary>
           <ErrorBoundary>
-            <Comments document={doc} canComment={canComment} canView={canView} />
+            <Comments document={doc} canComment={canComment} canView={canView} displayLanguage={displayLanguage} />
           </ErrorBoundary>
         </div>
       </div>
@@ -1428,7 +1600,11 @@ function AppContent() {
   const [showUserManagement, setShowUserManagement] = useState(false)
   const [showAuditLog, setShowAuditLog] = useState(false)
   const [showSectionManager, setShowSectionManager] = useState(false)
-  const [showChat, setShowChat] = useState(false)
+  const [chatLanguageMode, setChatLanguageMode] = useState(() => {
+    if (typeof window === 'undefined') return 'auto'
+    const cached = window.localStorage.getItem('chat_display_language')
+    return LANGUAGE_MODES.includes(cached) ? cached : 'auto'
+  })
   const addToast = useToast()
   const safeSetState = useSafeAsync()
 
@@ -1483,6 +1659,12 @@ function AppContent() {
 
   useEffect(() => { if (activeSection) loadDocuments() }, [activeSection, loadDocuments])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (!LANGUAGE_MODES.includes(chatLanguageMode)) return
+    window.localStorage.setItem('chat_display_language', chatLanguageMode)
+  }, [chatLanguageMode])
+
   const updateStatus = async (docId, status) => {
     if (!isValidUUID(docId)) return
     await supabase.from('documents').update({ status, updated_at: new Date().toISOString() }).eq('id', docId)
@@ -1530,7 +1712,6 @@ function AppContent() {
               </>
             )}
 
-            <button onClick={() => setShowChat(true)} aria-label="Otwórz czat">💬</button>
             <button onClick={() => supabase.auth.signOut()} aria-label="Wyloguj">🚪</button>
           </div>
         </header>
@@ -1629,14 +1810,17 @@ function AppContent() {
         )}
         {selectedDocument && (
           <ErrorBoundary>
-            <DocumentDetail document={selectedDocument} onClose={() => setSelectedDocument(null)} onUpdate={loadDocuments} />
+            <DocumentDetail
+              document={selectedDocument}
+              onClose={() => setSelectedDocument(null)}
+              onUpdate={loadDocuments}
+              displayLanguage={resolveLanguageMode(chatLanguageMode, profile?.side)}
+            />
           </ErrorBoundary>
         )}
-        {showChat && (
-          <ErrorBoundary>
-            <Chat onClose={() => setShowChat(false)} />
-          </ErrorBoundary>
-        )}
+        <ErrorBoundary>
+          <Chat displayLanguageMode={chatLanguageMode} onDisplayLanguageModeChange={setChatLanguageMode} />
+        </ErrorBoundary>
       </div>
     </ProfileContext.Provider>
   )
