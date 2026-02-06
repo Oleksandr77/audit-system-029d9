@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext, Component } from 'react'
 import { supabase } from './lib/supabase'
 
 // =====================================================
@@ -24,11 +24,13 @@ const STATUS_OPTIONS = [
   { value: 'missing', pl: '❌ Brak', uk: 'Відсутній' }
 ]
 
-const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB
+const MAX_FILE_SIZE = 100 * 1024 * 1024
 const MAX_FILES_PER_DOC = 100
 const MAX_COMMENT_LENGTH = 500
+const MAX_MESSAGE_LENGTH = 500
+const RATE_LIMIT_MS = 1000
+const USERS_PAGE_SIZE = 20
 
-// Supported file types
 const ALLOWED_FILE_TYPES = [
   'application/pdf',
   'application/msword',
@@ -42,40 +44,106 @@ const ALLOWED_FILE_TYPES = [
 const ALLOWED_EXTENSIONS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.txt', '.csv']
 
 const FILE_ICONS = {
-  'pdf': '📕',
-  'doc': '📘',
-  'docx': '📘',
-  'xls': '📗',
-  'xlsx': '📗',
-  'txt': '📄',
-  'csv': '📊',
-  'default': '📎'
+  'pdf': '📕', 'doc': '📘', 'docx': '📘', 'xls': '📗',
+  'xlsx': '📗', 'txt': '📄', 'csv': '📊', 'default': '📎'
 }
 
 // =====================================================
-// BILINGUAL TEXT HELPER
+// ERROR BOUNDARY (Critical for Production)
+// =====================================================
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props)
+    this.state = { hasError: false, error: null }
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('ErrorBoundary caught:', error, errorInfo)
+    // In production: send to Sentry/LogRocket
+  }
+
+  handleReset = () => {
+    this.setState({ hasError: false, error: null })
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="error-boundary" role="alert">
+          <div className="error-content">
+            <h2>
+              <span className="text-pl">Coś poszło nie tak</span>
+              <span className="text-uk">Щось пішло не так</span>
+            </h2>
+            <p>
+              <span className="text-pl">Wystąpił błąd. Spróbuj odświeżyć.</span>
+              <span className="text-uk">Виникла помилка. Спробуйте оновити.</span>
+            </p>
+            <div className="error-actions">
+              <button onClick={this.handleReset} className="btn-secondary">
+                Spróbuj ponownie / Спробувати
+              </button>
+              <button onClick={() => window.location.reload()} className="btn-primary">
+                Odśwież / Оновити
+              </button>
+            </div>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
+// =====================================================
+// BILINGUAL TEXT (with a11y)
 // =====================================================
 function BiText({ pl, uk, className = '' }) {
   return (
     <span className={`bi-text ${className}`}>
       <span className="text-pl">{pl}</span>
-      <span className="text-uk">{uk}</span>
+      <span className="text-uk" aria-hidden="true">{uk}</span>
     </span>
   )
 }
 
 // =====================================================
-// SECURITY UTILITIES
+// SECURITY UTILITIES (Enhanced XSS Protection)
 // =====================================================
+
+// Enhanced sanitization - prevents XSS including javascript: URIs
+function sanitizeText(text) {
+  if (!text || typeof text !== 'string') return ''
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/javascript:/gi, '') // Block javascript: URIs
+    .replace(/data:/gi, 'data_blocked:') // Block data: URIs
+    .replace(/vbscript:/gi, '') // Block vbscript:
+    .replace(/on\w+\s*=/gi, '') // Block event handlers
+    .trim()
+}
+
+// Safe text display component (prevents XSS in rendered content)
+function SafeText({ children }) {
+  if (typeof children !== 'string') return children
+  return <>{sanitizeText(children)}</>
+}
+
 function sanitizeFileName(originalName) {
   const uuid = crypto.randomUUID()
   const lastDot = originalName.lastIndexOf('.')
   let extension = lastDot > 0
     ? originalName.substring(lastDot).toLowerCase().replace(/[^a-z0-9.]/g, '')
     : ''
-  if (!ALLOWED_EXTENSIONS.includes(extension)) {
-    extension = '.bin'
-  }
+  if (!ALLOWED_EXTENSIONS.includes(extension)) extension = '.bin'
   return `${uuid}${extension}`
 }
 
@@ -84,13 +152,8 @@ function getFileExtension(filename) {
   return lastDot > 0 ? filename.substring(lastDot + 1).toLowerCase() : 'default'
 }
 
-function isValidFilePath(path) {
-  if (!path || typeof path !== 'string') return false
-  if (path.includes('..') || path.includes('//') || path.startsWith('/')) return false
-  return /^[a-zA-Z0-9\-_./]+$/.test(path)
-}
-
 function isValidUUID(str) {
+  if (!str || typeof str !== 'string') return false
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str)
 }
 
@@ -103,12 +166,6 @@ function validateFile(file) {
     return { valid: false, error: 'Niedozwolony typ pliku / Недозволений тип файлу' }
   }
   return { valid: true }
-}
-
-function sanitizeText(text) {
-  if (!text || typeof text !== 'string') return ''
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#x27;').trim()
 }
 
 // =====================================================
@@ -141,6 +198,19 @@ function useFocusTrap(ref, isActive) {
   }, [ref, isActive])
 }
 
+function useSafeAsync() {
+  const isMounted = useRef(true)
+  useEffect(() => {
+    isMounted.current = true
+    return () => { isMounted.current = false }
+  }, [])
+  return useCallback((callback) => {
+    return (...args) => {
+      if (isMounted.current) callback(...args)
+    }
+  }, [])
+}
+
 // =====================================================
 // CONTEXTS
 // =====================================================
@@ -158,7 +228,7 @@ function ToastProvider({ children }) {
   return (
     <ToastContext.Provider value={addToast}>
       {children}
-      <div className="toast-container">
+      <div className="toast-container" role="status" aria-live="polite">
         {toasts.map(t => <div key={t.id} className={`toast toast-${t.type}`}>{t.message}</div>)}
       </div>
     </ToastContext.Provider>
@@ -181,7 +251,13 @@ function useProfile() {
 async function logAudit(userId, action, entityType, entityId, details = null) {
   if (!isValidUUID(userId)) return
   try {
-    await supabase.from('audit_log').insert({ user_id: userId, action, entity_type: entityType, entity_id: entityId, details })
+    await supabase.from('audit_log').insert({
+      user_id: userId,
+      action: sanitizeText(action),
+      entity_type: sanitizeText(entityType),
+      entity_id: entityId,
+      details
+    })
   } catch (e) { console.error('Audit error:', e) }
 }
 
@@ -216,7 +292,7 @@ function Auth() {
         <form onSubmit={handleSubmit}>
           <input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email" />
           <input type="password" placeholder="Hasło / Пароль" value={password} onChange={e => setPassword(e.target.value)} required autoComplete="current-password" />
-          {error && <div className="error">{error}</div>}
+          {error && <div className="error" role="alert">{error}</div>}
           <button type="submit" disabled={loading}>{loading ? '...' : 'Zaloguj / Увійти'}</button>
         </form>
       </div>
@@ -230,16 +306,27 @@ function Auth() {
 function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
   const [files, setFiles] = useState([])
   const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const fileInputRef = useRef(null)
+  const abortControllerRef = useRef(null)
   const addToast = useToast()
   const profile = useProfile()
+  const safeSetState = useSafeAsync()
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+      }
+    }
+  }, [])
 
   const loadFiles = useCallback(async () => {
     if (!document?.id || !isValidUUID(document.id)) return
 
     let query = supabase.from('document_files').select('*').eq('document_id', document.id).order('created_at')
 
-    // If OPERATOR, only show published files
     if (profile?.side === 'OPERATOR') {
       const { data: accessData } = await supabase
         .from('document_access')
@@ -252,18 +339,18 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
         if (fileIds.length > 0) {
           query = query.in('id', fileIds)
         } else {
-          setFiles([])
+          safeSetState(setFiles)([])
           return
         }
       } else {
-        setFiles([])
+        safeSetState(setFiles)([])
         return
       }
     }
 
     const { data } = await query
-    setFiles(data || [])
-  }, [document?.id, profile?.side])
+    safeSetState(setFiles)(data || [])
+  }, [document?.id, profile?.side, safeSetState])
 
   useEffect(() => { loadFiles() }, [loadFiles])
 
@@ -274,44 +361,76 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
       return
     }
 
+    abortControllerRef.current = new AbortController()
     setUploading(true)
-    for (const file of selectedFiles) {
-      const validation = validateFile(file)
-      if (!validation.valid) { addToast(validation.error, 'error'); continue }
+    setUploadProgress(0)
 
-      const safeFileName = sanitizeFileName(file.name)
-      const filePath = `${document.id}/${safeFileName}`
+    const CONCURRENT_UPLOADS = 3
+    let completed = 0
+    const total = selectedFiles.length
 
-      const { error: uploadError } = await supabase.storage.from('documents').upload(filePath, file)
+    for (let i = 0; i < selectedFiles.length; i += CONCURRENT_UPLOADS) {
+      if (abortControllerRef.current?.signal.aborted) break
 
-      if (!uploadError) {
-        const ext = getFileExtension(file.name)
-        const { data: fileData } = await supabase.from('document_files').insert({
-          document_id: document.id,
-          file_name: sanitizeText(file.name),
-          file_path: filePath,
-          file_size: file.size,
-          file_type: ext,
-          mime_type: file.type,
-          uploaded_by: profile.id
-        }).select().single()
+      const batch = selectedFiles.slice(i, i + CONCURRENT_UPLOADS)
 
-        await logAudit(profile.id, 'upload_file', 'document_file', document.id, { file_name: file.name })
-        addToast('Plik przesłany / Файл завантажено', 'success')
+      await Promise.all(batch.map(async (file) => {
+        if (abortControllerRef.current?.signal.aborted) return
 
-        // If FNU, file is not visible to OPERATOR by default
-        if (profile.side === 'FNU' && fileData) {
-          await supabase.from('document_access').insert({
-            document_id: document.id,
-            file_id: fileData.id,
-            visible_to_operator: false
-          })
+        const validation = validateFile(file)
+        if (!validation.valid) {
+          addToast(validation.error, 'error')
+          completed++
+          return
         }
-      } else {
-        addToast('Błąd przesyłania / Помилка завантаження', 'error')
-      }
+
+        const safeFileName = sanitizeFileName(file.name)
+        const filePath = `${document.id}/${safeFileName}`
+
+        try {
+          const { error: uploadError } = await supabase.storage.from('documents').upload(filePath, file)
+          if (uploadError) throw uploadError
+
+          const ext = getFileExtension(file.name)
+          const { data: fileData, error: dbError } = await supabase.from('document_files').insert({
+            document_id: document.id,
+            file_name: sanitizeText(file.name),
+            file_path: filePath,
+            file_size: file.size,
+            file_type: ext,
+            mime_type: file.type,
+            uploaded_by: profile.id
+          }).select().single()
+
+          if (dbError) {
+            await supabase.storage.from('documents').remove([filePath])
+            throw dbError
+          }
+
+          await logAudit(profile.id, 'upload_file', 'document_file', document.id, { file_name: file.name })
+
+          if (profile.side === 'FNU' && fileData) {
+            await supabase.from('document_access').insert({
+              document_id: document.id,
+              file_id: fileData.id,
+              visible_to_operator: false
+            })
+          }
+        } catch (err) {
+          addToast(`Błąd: ${file.name}`, 'error')
+          console.error('Upload error:', err)
+        }
+
+        completed++
+        safeSetState(setUploadProgress)(Math.round((completed / total) * 100))
+      }))
+    }
+
+    if (!abortControllerRef.current?.signal.aborted) {
+      addToast('Pliki przesłane / Файли завантажено', 'success')
     }
     setUploading(false)
+    setUploadProgress(0)
     loadFiles()
     onUpdate?.()
     if (fileInputRef.current) fileInputRef.current.value = ''
@@ -333,7 +452,7 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
       const url = URL.createObjectURL(data)
       const a = window.document.createElement('a')
       a.href = url; a.download = fileName; a.click()
-      URL.revokeObjectURL(url)
+      setTimeout(() => URL.revokeObjectURL(url), 10000)
       await logAudit(profile.id, 'download_file', 'document_file', document.id)
     }
   }
@@ -347,30 +466,39 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
   }
 
   const publishToOperator = async (fileId) => {
-    await supabase.from('document_access').upsert({
-      document_id: document.id,
-      file_id: fileId,
-      visible_to_operator: true,
-      published_at: new Date().toISOString(),
-      published_by: profile.id
-    }, { onConflict: 'document_id,file_id' })
+    try {
+      await supabase.from('document_access').upsert({
+        document_id: document.id,
+        file_id: fileId,
+        visible_to_operator: true,
+        published_at: new Date().toISOString(),
+        published_by: profile.id
+      }, { onConflict: 'document_id,file_id' })
 
-    // Notify OPERATOR users
-    const { data: operators } = await supabase.from('profiles').select('id').eq('side', 'OPERATOR').eq('is_active', true)
-    if (operators) {
-      for (const op of operators) {
-        await supabase.from('notifications').insert({
+      const { data: operators } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('side', 'OPERATOR')
+        .eq('is_active', true)
+
+      if (operators && operators.length > 0) {
+        const notifications = operators.map(op => ({
           user_id: op.id,
           type: 'new_document',
           title: 'Nowe dokumenty / Нові документи',
           message: 'Dodano nowe dokumenty do przeglądu / Додано нові документи',
           entity_type: 'document',
           entity_id: document.id
-        })
+        }))
+        await supabase.from('notifications').insert(notifications)
       }
+
+      addToast('Opublikowano dla OPERATOR / Опубліковано для OPERATOR', 'success')
+      loadFiles()
+    } catch (err) {
+      addToast('Błąd publikacji / Помилка публікації', 'error')
+      console.error('Publish error:', err)
     }
-    addToast('Opublikowano dla OPERATOR / Опубліковано для OPERATOR', 'success')
-    loadFiles()
   }
 
   if (!canView) return null
@@ -381,26 +509,31 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
         <BiText pl={`Pliki (${files.length}/${MAX_FILES_PER_DOC})`} uk={`Файли (${files.length}/${MAX_FILES_PER_DOC})`} />
         {canAdd && files.length < MAX_FILES_PER_DOC && (
           <label className="upload-btn">
-            {uploading ? '...' : '+ Dodaj / Додати'}
+            {uploading ? `${uploadProgress}%` : '+ Dodaj / Додати'}
             <input ref={fileInputRef} type="file" accept={ALLOWED_EXTENSIONS.join(',')} multiple onChange={handleUpload} disabled={uploading} style={{ display: 'none' }} />
           </label>
         )}
       </div>
+      {uploading && (
+        <div className="upload-progress" role="progressbar" aria-valuenow={uploadProgress} aria-valuemin="0" aria-valuemax="100" aria-label="Upload progress">
+          <div className="upload-progress-bar" style={{ width: `${uploadProgress}%` }} />
+        </div>
+      )}
       <ul className="files-list">
         {files.map(file => {
           const ext = file.file_type || getFileExtension(file.file_name)
           const icon = FILE_ICONS[ext] || FILE_ICONS.default
           return (
             <li key={file.id} className="file-item">
-              <span className="file-icon">{icon}</span>
+              <span className="file-icon" aria-hidden="true">{icon}</span>
               <span className="file-name" title={file.file_name}>{file.file_name}</span>
               <span className="file-size">{(file.file_size / 1024 / 1024).toFixed(2)} MB</span>
               <div className="file-actions">
-                <button onClick={() => handlePreview(file.file_path)} title="Podgląd / Перегляд">👁️</button>
-                <button onClick={() => handleDownload(file.file_path, file.file_name)} title="Pobierz / Завантажити">⬇️</button>
-                {canDelete && <button onClick={() => handleDelete(file.id, file.file_path)} title="Usuń / Видалити">🗑️</button>}
+                <button onClick={() => handlePreview(file.file_path)} aria-label="Podgląd / Перегляд">👁️</button>
+                <button onClick={() => handleDownload(file.file_path, file.file_name)} aria-label="Pobierz / Завантажити">⬇️</button>
+                {canDelete && <button onClick={() => handleDelete(file.id, file.file_path)} aria-label="Usuń / Видалити">🗑️</button>}
                 {profile?.side === 'FNU' && profile?.role === 'super_admin' && (
-                  <button onClick={() => publishToOperator(file.id)} title="Opublikuj dla OPERATOR" className="btn-publish">📤</button>
+                  <button onClick={() => publishToOperator(file.id)} aria-label="Opublikuj dla OPERATOR" className="btn-publish">📤</button>
                 )}
               </div>
             </li>
@@ -408,6 +541,36 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
         })}
         {files.length === 0 && <li className="no-files"><BiText pl="Brak plików" uk="Немає файлів" /></li>}
       </ul>
+    </div>
+  )
+}
+
+// =====================================================
+// COMMENT ITEM COMPONENT (Memoized for performance)
+// =====================================================
+const CommentItem = ({ comment, depth, maxDepth, onReply, onToggleVisibility, canComment, canToggle }) => {
+  if (depth >= maxDepth) return null
+
+  return (
+    <div className={`comment ${depth > 0 ? 'reply' : ''}`} style={{ marginLeft: depth * 16 }}>
+      <div className="comment-header">
+        <span className="comment-author">
+          <SafeText>{comment.author?.full_name || comment.author?.email}</SafeText>
+          <span className={`side-badge ${comment.author?.side?.toLowerCase()}`}>{comment.author?.side}</span>
+        </span>
+        <time dateTime={comment.created_at}>{new Date(comment.created_at).toLocaleString()}</time>
+      </div>
+      <p className="comment-content"><SafeText>{comment.content}</SafeText></p>
+      <div className="comment-actions">
+        {canComment && depth < maxDepth - 1 && (
+          <button onClick={() => onReply(comment.id)} aria-label="Odpowiedz / Відповісти">↩️ Odpowiedz</button>
+        )}
+        {canToggle && (
+          <button onClick={() => onToggleVisibility(comment.id, comment.visible_to_sides || [])}>
+            {(comment.visible_to_sides || []).includes('OPERATOR') ? '🔓 OPERATOR' : '🔒 FNU'}
+          </button>
+        )}
+      </div>
     </div>
   )
 }
@@ -422,6 +585,8 @@ function Comments({ document, canComment, canView }) {
   const [submitting, setSubmitting] = useState(false)
   const addToast = useToast()
   const profile = useProfile()
+  const safeSetState = useSafeAsync()
+  const MAX_REPLY_DEPTH = 5
 
   const loadComments = useCallback(async () => {
     if (!document?.id) return
@@ -431,14 +596,13 @@ function Comments({ document, canComment, canView }) {
       .eq('document_id', document.id)
       .order('created_at')
 
-    // Filter by visibility
     const filtered = (data || []).filter(c => {
       if (profile?.role === 'super_admin') return true
       if (!c.visible_to_sides) return true
       return c.visible_to_sides.includes(profile?.side)
     })
-    setComments(filtered)
-  }, [document?.id, profile])
+    safeSetState(setComments)(filtered)
+  }, [document?.id, profile, safeSetState])
 
   useEffect(() => { if (canView) loadComments() }, [canView, loadComments])
 
@@ -466,9 +630,7 @@ function Comments({ document, canComment, canView }) {
   }
 
   const toggleVisibility = async (commentId, currentSides) => {
-    const newSides = currentSides.includes('OPERATOR')
-      ? ['FNU']
-      : ['FNU', 'OPERATOR']
+    const newSides = currentSides.includes('OPERATOR') ? ['FNU'] : ['FNU', 'OPERATOR']
     await supabase.from('comments').update({ visible_to_sides: newSides }).eq('id', commentId)
     loadComments()
     addToast('Widoczność zmieniona / Видимість змінено', 'success')
@@ -479,32 +641,23 @@ function Comments({ document, canComment, canView }) {
   const topLevel = comments.filter(c => !c.parent_comment_id)
   const getReplies = (parentId) => comments.filter(c => c.parent_comment_id === parentId)
 
-  const renderComment = (comment, isReply = false) => (
-    <div key={comment.id} className={`comment ${isReply ? 'reply' : ''}`}>
-      <div className="comment-header">
-        <span className="comment-author">
-          {comment.author?.full_name || comment.author?.email}
-          <span className={`side-badge ${comment.author?.side?.toLowerCase()}`}>{comment.author?.side}</span>
-        </span>
-        <time>{new Date(comment.created_at).toLocaleString()}</time>
-      </div>
-      <p className="comment-content">{comment.content}</p>
-      <div className="comment-actions">
-        {canComment && !isReply && (
-          <button onClick={() => setReplyTo(comment.id)}>↩️ Odpowiedz / Відповісти</button>
-        )}
-        {profile?.role === 'super_admin' && (
-          <button onClick={() => toggleVisibility(comment.id, comment.visible_to_sides || [])}>
-            {(comment.visible_to_sides || []).includes('OPERATOR') ? '🔓 Widoczny dla OPERATOR' : '🔒 Tylko FNU'}
-          </button>
-        )}
-      </div>
-      {getReplies(comment.id).map(r => renderComment(r, true))}
+  const renderCommentTree = (comment, depth = 0) => (
+    <div key={comment.id}>
+      <CommentItem
+        comment={comment}
+        depth={depth}
+        maxDepth={MAX_REPLY_DEPTH}
+        onReply={setReplyTo}
+        onToggleVisibility={toggleVisibility}
+        canComment={canComment}
+        canToggle={profile?.role === 'super_admin'}
+      />
+      {getReplies(comment.id).map(r => renderCommentTree(r, depth + 1))}
     </div>
   )
 
   return (
-    <section className="comments-section">
+    <section className="comments-section" aria-label="Komentarze / Коментарі">
       <h4><BiText pl={`Komentarze (${comments.length})`} uk={`Коментарі (${comments.length})`} /></h4>
 
       {canComment && (
@@ -512,12 +665,18 @@ function Comments({ document, canComment, canView }) {
           {replyTo && (
             <div className="replying-to">
               <BiText pl="Odpowiedź na komentarz" uk="Відповідь на коментар" />
-              <button type="button" onClick={() => setReplyTo(null)}>✕</button>
+              <button type="button" onClick={() => setReplyTo(null)} aria-label="Anuluj odpowiedź">✕</button>
             </div>
           )}
-          <textarea value={newComment} onChange={e => setNewComment(e.target.value)} placeholder="Napisz komentarz... / Напишіть коментар..." maxLength={MAX_COMMENT_LENGTH} />
+          <textarea
+            value={newComment}
+            onChange={e => setNewComment(e.target.value)}
+            placeholder="Napisz komentarz... / Напишіть коментар..."
+            maxLength={MAX_COMMENT_LENGTH}
+            aria-label="Treść komentarza"
+          />
           <div className="comment-footer">
-            <span>{newComment.length}/{MAX_COMMENT_LENGTH}</span>
+            <span aria-live="polite">{newComment.length}/{MAX_COMMENT_LENGTH}</span>
             <button type="submit" disabled={submitting || !newComment.trim()}>
               {submitting ? '...' : 'Wyślij / Надіслати'}
             </button>
@@ -525,8 +684,8 @@ function Comments({ document, canComment, canView }) {
         </form>
       )}
 
-      <div className="comments-list">
-        {topLevel.map(c => renderComment(c))}
+      <div className="comments-list" role="feed" aria-label="Lista komentarzy">
+        {topLevel.map(c => renderCommentTree(c))}
         {comments.length === 0 && <div className="no-comments"><BiText pl="Brak komentarzy" uk="Немає коментарів" /></div>}
       </div>
     </section>
@@ -534,7 +693,7 @@ function Comments({ document, canComment, canView }) {
 }
 
 // =====================================================
-// CHAT COMPONENT
+// CHAT COMPONENT (SECURE - No SQL Interpolation)
 // =====================================================
 function Chat({ onClose }) {
   const [messages, setMessages] = useState([])
@@ -542,111 +701,237 @@ function Chat({ onClose }) {
   const [selectedUser, setSelectedUser] = useState(null)
   const [newMessage, setNewMessage] = useState('')
   const [sending, setSending] = useState(false)
-  const [allowedRecipients, setAllowedRecipients] = useState([])
+  const [userSearch, setUserSearch] = useState('')
+  const debouncedSearch = useDebounce(userSearch, 300)
+  const lastMessageTime = useRef(0)
   const messagesEndRef = useRef(null)
+  const channelRef = useRef(null)
   const addToast = useToast()
   const profile = useProfile()
+  const safeSetState = useSafeAsync()
 
+  // Load users with search
   useEffect(() => {
+    const loadUsers = async () => {
+      if (!profile?.id) return
+
+      let query = supabase
+        .from('profiles')
+        .select('id, full_name, email, side, role')
+        .eq('is_active', true)
+        .neq('id', profile.id)
+        .limit(USERS_PAGE_SIZE)
+
+      if (debouncedSearch) {
+        query = query.or(`full_name.ilike.%${sanitizeText(debouncedSearch)}%,email.ilike.%${sanitizeText(debouncedSearch)}%`)
+      }
+
+      if (profile.role !== 'super_admin') {
+        const { data: permissions } = await supabase
+          .from('chat_permissions')
+          .select('can_message_user_id')
+          .eq('user_id', profile.id)
+
+        if (permissions && permissions.length > 0) {
+          const allowedIds = permissions.map(p => p.can_message_user_id).filter(isValidUUID)
+          if (allowedIds.length > 0) {
+            query = query.in('id', allowedIds)
+          } else {
+            safeSetState(setUsers)([])
+            return
+          }
+        } else {
+          safeSetState(setUsers)([])
+          return
+        }
+      }
+
+      const { data } = await query
+      safeSetState(setUsers)(data || [])
+    }
+
     loadUsers()
-    loadAllowedRecipients()
-  }, [])
+  }, [profile?.id, profile?.role, debouncedSearch, safeSetState])
+
+  // SECURE: Load messages WITHOUT SQL interpolation
+  const loadMessages = useCallback(async () => {
+    if (!selectedUser || !profile?.id) return
+    if (!isValidUUID(selectedUser) || !isValidUUID(profile.id)) return
+
+    // Two separate queries instead of .or() with interpolation
+    const [sentResult, receivedResult] = await Promise.all([
+      supabase
+        .from('chat_messages')
+        .select('*, sender:sender_id(full_name, email, side)')
+        .eq('sender_id', profile.id)
+        .eq('recipient_id', selectedUser)
+        .order('created_at', { ascending: true })
+        .limit(50),
+      supabase
+        .from('chat_messages')
+        .select('*, sender:sender_id(full_name, email, side)')
+        .eq('sender_id', selectedUser)
+        .eq('recipient_id', profile.id)
+        .order('created_at', { ascending: true })
+        .limit(50)
+    ])
+
+    // Merge and sort
+    const allMessages = [
+      ...(sentResult.data || []),
+      ...(receivedResult.data || [])
+    ].sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+
+    safeSetState(setMessages)(allMessages)
+
+    // Mark as read
+    if (receivedResult.data && receivedResult.data.length > 0) {
+      const unreadIds = receivedResult.data.filter(m => !m.is_read).map(m => m.id)
+      if (unreadIds.length > 0) {
+        await supabase
+          .from('chat_messages')
+          .update({ is_read: true })
+          .in('id', unreadIds)
+      }
+    }
+  }, [selectedUser, profile?.id, safeSetState])
+
+  // Realtime subscription
+  useEffect(() => {
+    if (!profile?.id || !isValidUUID(profile.id)) return
+
+    channelRef.current = supabase
+      .channel(`chat_${profile.id}`)
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'chat_messages' },
+        (payload) => {
+          if (payload.new.recipient_id === profile.id && payload.new.sender_id === selectedUser) {
+            loadMessages()
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current)
+      }
+    }
+  }, [profile?.id, selectedUser, loadMessages])
 
   useEffect(() => {
     if (selectedUser) loadMessages()
-    const interval = setInterval(() => { if (selectedUser) loadMessages() }, 5000)
-    return () => clearInterval(interval)
-  }, [selectedUser])
+  }, [selectedUser, loadMessages])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  const loadUsers = async () => {
-    const { data } = await supabase.from('profiles').select('id, full_name, email, side, role').eq('is_active', true).neq('id', profile?.id)
-    setUsers(data || [])
-  }
-
-  const loadAllowedRecipients = async () => {
-    if (profile?.role === 'super_admin') {
-      // Super admin can message everyone
-      const { data } = await supabase.from('profiles').select('id').eq('is_active', true).neq('id', profile?.id)
-      setAllowedRecipients((data || []).map(u => u.id))
-    } else {
-      const { data } = await supabase.from('chat_permissions').select('can_message_user_id').eq('user_id', profile?.id)
-      setAllowedRecipients((data || []).map(p => p.can_message_user_id))
-    }
-  }
-
-  const loadMessages = async () => {
-    if (!selectedUser) return
-    const { data } = await supabase
-      .from('chat_messages')
-      .select('*, sender:sender_id(full_name, email, side)')
-      .or(`and(sender_id.eq.${profile?.id},recipient_id.eq.${selectedUser}),and(sender_id.eq.${selectedUser},recipient_id.eq.${profile?.id})`)
-      .order('created_at')
-    setMessages(data || [])
-
-    // Mark as read
-    await supabase.from('chat_messages').update({ is_read: true }).eq('recipient_id', profile?.id).eq('sender_id', selectedUser)
-  }
-
   const sendMessage = async (e) => {
     e.preventDefault()
     if (!newMessage.trim() || !selectedUser) return
+
+    // Rate limiting
+    const now = Date.now()
+    if (now - lastMessageTime.current < RATE_LIMIT_MS) {
+      addToast('Zbyt szybko / Занадто швидко', 'warning')
+      return
+    }
+    lastMessageTime.current = now
+
+    if (!isValidUUID(selectedUser)) {
+      addToast('Nieprawidłowy odbiorca / Невірний отримувач', 'error')
+      return
+    }
+
+    const messageContent = sanitizeText(newMessage.trim())
+    if (messageContent.length > MAX_MESSAGE_LENGTH) {
+      addToast(`Maksymalnie ${MAX_MESSAGE_LENGTH} znaków`, 'error')
+      return
+    }
+
     setSending(true)
 
-    await supabase.from('chat_messages').insert({
+    const { error } = await supabase.from('chat_messages').insert({
       sender_id: profile.id,
       recipient_id: selectedUser,
-      content: sanitizeText(newMessage.trim())
+      content: messageContent
     })
 
-    setNewMessage('')
-    loadMessages()
+    if (!error) {
+      setNewMessage('')
+      loadMessages()
+    } else {
+      addToast('Błąd wysyłania / Помилка надсилання', 'error')
+    }
     setSending(false)
   }
 
-  const filteredUsers = users.filter(u => allowedRecipients.includes(u.id) || profile?.role === 'super_admin')
-
   return (
-    <div className="chat-panel">
+    <div className="chat-panel" role="dialog" aria-label="Czat / Чат" aria-modal="true">
       <div className="chat-header">
         <BiText pl="Czat" uk="Чат" />
-        <button onClick={onClose}>✕</button>
+        <button onClick={onClose} aria-label="Zamknij czat">✕</button>
       </div>
 
       <div className="chat-body">
         <div className="chat-users">
-          <h5><BiText pl="Kontakty" uk="Контакти" /></h5>
-          {filteredUsers.map(u => (
-            <div key={u.id} className={`chat-user ${selectedUser === u.id ? 'active' : ''}`} onClick={() => setSelectedUser(u.id)}>
-              <span className="user-name">{u.full_name || u.email}</span>
-              <span className={`side-badge ${u.side?.toLowerCase()}`}>{u.side}</span>
-            </div>
-          ))}
-          {filteredUsers.length === 0 && <div className="no-contacts"><BiText pl="Brak kontaktów" uk="Немає контактів" /></div>}
+          <input
+            type="search"
+            placeholder="Szukaj... / Пошук..."
+            value={userSearch}
+            onChange={e => setUserSearch(e.target.value)}
+            className="user-search"
+            aria-label="Szukaj użytkownika"
+          />
+          <div className="users-list" role="listbox" aria-label="Lista kontaktów">
+            {users.map(u => (
+              <button
+                key={u.id}
+                className={`chat-user ${selectedUser === u.id ? 'active' : ''}`}
+                onClick={() => setSelectedUser(u.id)}
+                role="option"
+                aria-selected={selectedUser === u.id}
+              >
+                <span className="user-name"><SafeText>{u.full_name || u.email}</SafeText></span>
+                <span className={`side-badge ${u.side?.toLowerCase()}`}>{u.side}</span>
+              </button>
+            ))}
+            {users.length === 0 && <div className="no-contacts"><BiText pl="Brak kontaktów" uk="Немає контактів" /></div>}
+          </div>
         </div>
 
         <div className="chat-messages">
           {selectedUser ? (
             <>
-              <div className="messages-list">
+              <div
+                className="messages-list"
+                role="log"
+                aria-live="polite"
+                aria-atomic="false"
+                aria-label="Historia wiadomości"
+              >
                 {messages.map(m => (
                   <div key={m.id} className={`message ${m.sender_id === profile?.id ? 'sent' : 'received'}`}>
                     <div className="message-header">
-                      <span className="message-sender">{m.sender?.full_name || m.sender?.email}</span>
+                      <span className="message-sender"><SafeText>{m.sender?.full_name || m.sender?.email}</SafeText></span>
                       <span className={`side-badge ${m.sender?.side?.toLowerCase()}`}>{m.sender?.side}</span>
                     </div>
-                    <p className="message-content">{m.content}</p>
-                    <time className="message-time">{new Date(m.created_at).toLocaleString()}</time>
+                    <p className="message-content"><SafeText>{m.content}</SafeText></p>
+                    <time className="message-time" dateTime={m.created_at}>{new Date(m.created_at).toLocaleString()}</time>
                   </div>
                 ))}
                 <div ref={messagesEndRef} />
               </div>
               <form onSubmit={sendMessage} className="message-form">
-                <input value={newMessage} onChange={e => setNewMessage(e.target.value)} placeholder="Napisz wiadomość... / Напишіть повідомлення..." />
-                <button type="submit" disabled={sending || !newMessage.trim()}>📤</button>
+                <input
+                  value={newMessage}
+                  onChange={e => setNewMessage(e.target.value)}
+                  placeholder="Napisz wiadomość... / Напишіть повідомлення..."
+                  maxLength={MAX_MESSAGE_LENGTH}
+                  aria-label="Treść wiadomości"
+                />
+                <button type="submit" disabled={sending || !newMessage.trim()} aria-label="Wyślij wiadomość">📤</button>
               </form>
             </>
           ) : (
@@ -666,20 +951,21 @@ function UserManagement({ onClose }) {
   const [loading, setLoading] = useState(true)
   const [newUser, setNewUser] = useState({ email: '', password: '', full_name: '', phone: '', position: '', company_name: '', role: 'user_fnu', side: 'FNU' })
   const [creating, setCreating] = useState(false)
-  const [editingPermissions, setEditingPermissions] = useState(null)
   const modalRef = useRef(null)
   const addToast = useToast()
   const profile = useProfile()
+  const safeSetState = useSafeAsync()
 
   useFocusTrap(modalRef, true)
 
-  useEffect(() => { loadUsers() }, [])
-
-  const loadUsers = async () => {
-    const { data } = await supabase.from('profiles').select('*').order('created_at', { ascending: false })
-    setUsers(data || [])
-    setLoading(false)
-  }
+  useEffect(() => {
+    const loadUsers = async () => {
+      const { data } = await supabase.from('profiles').select('*').order('created_at', { ascending: false })
+      safeSetState(setUsers)(data || [])
+      safeSetState(setLoading)(false)
+    }
+    loadUsers()
+  }, [safeSetState])
 
   const createUser = async (e) => {
     e.preventDefault()
@@ -697,9 +983,9 @@ function UserManagement({ onClose }) {
           id: data.user.id,
           email: newUser.email,
           full_name: sanitizeText(newUser.full_name),
-          phone: newUser.phone,
-          position: newUser.position,
-          company_name: newUser.company_name,
+          phone: sanitizeText(newUser.phone),
+          position: sanitizeText(newUser.position),
+          company_name: sanitizeText(newUser.company_name),
           role: newUser.role,
           side: newUser.side,
           is_active: true
@@ -708,7 +994,10 @@ function UserManagement({ onClose }) {
       }
 
       setNewUser({ email: '', password: '', full_name: '', phone: '', position: '', company_name: '', role: 'user_fnu', side: 'FNU' })
-      loadUsers()
+
+      const { data: usersData } = await supabase.from('profiles').select('*').order('created_at', { ascending: false })
+      safeSetState(setUsers)(usersData || [])
+
       addToast('Użytkownik utworzony / Користувача створено', 'success')
     } catch (err) { addToast('Błąd: ' + err.message, 'error') }
     setCreating(false)
@@ -717,22 +1006,21 @@ function UserManagement({ onClose }) {
   const updateUser = async (userId, updates) => {
     await supabase.from('profiles').update(updates).eq('id', userId)
     await logAudit(profile.id, 'update_user', 'profile', userId, updates)
-    loadUsers()
-    addToast('Zaktualizowano / Оновлено', 'success')
-  }
 
-  const toggleActive = async (userId, isActive) => {
-    await updateUser(userId, { is_active: !isActive })
+    const { data } = await supabase.from('profiles').select('*').order('created_at', { ascending: false })
+    safeSetState(setUsers)(data || [])
+
+    addToast('Zaktualizowano / Оновлено', 'success')
   }
 
   if (loading) return <div className="loading">Ładowanie... / Завантаження...</div>
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div ref={modalRef} className="modal user-management wide" onClick={e => e.stopPropagation()}>
+      <div ref={modalRef} className="modal user-management wide" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="user-mgmt-title">
         <div className="modal-header">
-          <h2><BiText pl="Zarządzanie użytkownikami" uk="Управління користувачами" /></h2>
-          <button className="close-btn" onClick={onClose}>✕</button>
+          <h2 id="user-mgmt-title"><BiText pl="Zarządzanie użytkownikami" uk="Управління користувачами" /></h2>
+          <button className="close-btn" onClick={onClose} aria-label="Zamknij">✕</button>
         </div>
 
         <div className="modal-body">
@@ -740,16 +1028,16 @@ function UserManagement({ onClose }) {
             <h4><BiText pl="Nowy użytkownik" uk="Новий користувач" /></h4>
             <form onSubmit={createUser} className="user-form">
               <div className="form-grid">
-                <input placeholder="Email" type="email" value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} required />
-                <input placeholder="Hasło / Пароль" type="password" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} required minLength={6} />
-                <input placeholder="Imię i nazwisko / Ім'я" value={newUser.full_name} onChange={e => setNewUser({...newUser, full_name: e.target.value})} required />
-                <input placeholder="Telefon / Телефон" value={newUser.phone} onChange={e => setNewUser({...newUser, phone: e.target.value})} />
-                <input placeholder="Stanowisko / Посада" value={newUser.position} onChange={e => setNewUser({...newUser, position: e.target.value})} />
-                <input placeholder="Firma / Компанія" value={newUser.company_name} onChange={e => setNewUser({...newUser, company_name: e.target.value})} />
-                <select value={newUser.side} onChange={e => setNewUser({...newUser, side: e.target.value})}>
+                <input placeholder="Email" type="email" value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} required aria-label="Email" />
+                <input placeholder="Hasło / Пароль" type="password" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} required minLength={6} aria-label="Hasło" />
+                <input placeholder="Imię i nazwisko / Ім'я" value={newUser.full_name} onChange={e => setNewUser({...newUser, full_name: e.target.value})} required aria-label="Imię i nazwisko" />
+                <input placeholder="Telefon / Телефон" value={newUser.phone} onChange={e => setNewUser({...newUser, phone: e.target.value})} aria-label="Telefon" />
+                <input placeholder="Stanowisko / Посада" value={newUser.position} onChange={e => setNewUser({...newUser, position: e.target.value})} aria-label="Stanowisko" />
+                <input placeholder="Firma / Компанія" value={newUser.company_name} onChange={e => setNewUser({...newUser, company_name: e.target.value})} aria-label="Firma" />
+                <select value={newUser.side} onChange={e => setNewUser({...newUser, side: e.target.value})} aria-label="Strona">
                   {Object.entries(SIDES).map(([k, v]) => <option key={k} value={k}>{v.pl}</option>)}
                 </select>
-                <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})}>
+                <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})} aria-label="Rola">
                   {Object.entries(ROLES).map(([k, v]) => <option key={k} value={k}>{v.pl}</option>)}
                 </select>
               </div>
@@ -759,40 +1047,38 @@ function UserManagement({ onClose }) {
 
           <h4><BiText pl={`Lista użytkowników (${users.length})`} uk={`Список користувачів (${users.length})`} /></h4>
           <div className="users-table-container">
-            <table className="users-table">
+            <table className="users-table" aria-label="Lista użytkowników">
               <thead>
                 <tr>
-                  <th>Imię / Ім'я</th>
-                  <th>Email</th>
-                  <th>Telefon</th>
-                  <th>Stanowisko</th>
-                  <th>Strona / Сторона</th>
-                  <th>Rola / Роль</th>
-                  <th>Status</th>
-                  <th>Akcje / Дії</th>
+                  <th scope="col">Imię / Ім'я</th>
+                  <th scope="col">Email</th>
+                  <th scope="col">Telefon</th>
+                  <th scope="col">Strona</th>
+                  <th scope="col">Rola</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Akcje</th>
                 </tr>
               </thead>
               <tbody>
                 {users.map(u => (
                   <tr key={u.id} className={u.is_active ? '' : 'inactive'}>
-                    <td>{u.full_name || '—'}</td>
+                    <td><SafeText>{u.full_name || '—'}</SafeText></td>
                     <td>{u.email}</td>
                     <td>{u.phone || '—'}</td>
-                    <td>{u.position || '—'}</td>
                     <td>
-                      <select value={u.side || 'FNU'} onChange={e => updateUser(u.id, { side: e.target.value })} className={`side-select ${u.side?.toLowerCase()}`}>
-                        {Object.entries(SIDES).map(([k, v]) => <option key={k} value={k}>{k}</option>)}
+                      <select value={u.side || 'FNU'} onChange={e => updateUser(u.id, { side: e.target.value })} className={`side-select ${u.side?.toLowerCase()}`} aria-label={`Strona dla ${u.email}`}>
+                        {Object.entries(SIDES).map(([k]) => <option key={k} value={k}>{k}</option>)}
                       </select>
                     </td>
                     <td>
-                      <select value={u.role} onChange={e => updateUser(u.id, { role: e.target.value })} disabled={u.id === profile?.id}>
+                      <select value={u.role} onChange={e => updateUser(u.id, { role: e.target.value })} disabled={u.id === profile?.id} aria-label={`Rola dla ${u.email}`}>
                         {Object.entries(ROLES).map(([k, v]) => <option key={k} value={k}>{v.pl}</option>)}
                       </select>
                     </td>
                     <td><span className={`status-badge ${u.is_active ? 'active' : 'inactive'}`}>{u.is_active ? 'Aktywny' : 'Nieaktywny'}</span></td>
                     <td>
                       {u.id !== profile?.id && (
-                        <button onClick={() => toggleActive(u.id, u.is_active)} className={u.is_active ? 'btn-danger' : 'btn-success'}>
+                        <button onClick={() => updateUser(u.id, { is_active: !u.is_active })} className={u.is_active ? 'btn-danger' : 'btn-success'} aria-label={u.is_active ? 'Dezaktywuj' : 'Aktywuj'}>
                           {u.is_active ? '🔒' : '🔓'}
                         </button>
                       )}
@@ -809,7 +1095,7 @@ function UserManagement({ onClose }) {
 }
 
 // =====================================================
-// AUDIT LOG COMPONENT (Super Admin only)
+// AUDIT LOG COMPONENT
 // =====================================================
 function AuditLog({ onClose }) {
   const [logs, setLogs] = useState([])
@@ -817,28 +1103,29 @@ function AuditLog({ onClose }) {
   const [filter, setFilter] = useState('')
   const debouncedFilter = useDebounce(filter, 300)
   const modalRef = useRef(null)
+  const safeSetState = useSafeAsync()
 
   useFocusTrap(modalRef, true)
 
   useEffect(() => {
     const load = async () => {
       const { data } = await supabase.from('audit_log').select('*, user:user_id(full_name, email, side)').order('created_at', { ascending: false }).limit(500)
-      setLogs(data || [])
-      setLoading(false)
+      safeSetState(setLogs)(data || [])
+      safeSetState(setLoading)(false)
     }
     load()
-  }, [])
+  }, [safeSetState])
 
   const actionLabels = {
-    'upload_file': '📤 Przesłanie pliku / Завантаження файлу',
-    'delete_file': '🗑️ Usunięcie pliku / Видалення файлу',
-    'download_file': '⬇️ Pobranie pliku / Скачування файлу',
-    'view_file': '👁️ Podgląd pliku / Перегляд файлу',
-    'view_document': '👁️ Podgląd dokumentu / Перегляд документа',
-    'update_status': '🔄 Zmiana statusu / Зміна статусу',
-    'add_comment': '💬 Dodanie komentarza / Додано коментар',
-    'create_user': '👤 Utworzenie użytkownika / Створення користувача',
-    'update_user': '✏️ Aktualizacja użytkownika / Оновлення користувача'
+    'upload_file': '📤 Przesłanie pliku',
+    'delete_file': '🗑️ Usunięcie pliku',
+    'download_file': '⬇️ Pobranie pliku',
+    'view_file': '👁️ Podgląd pliku',
+    'view_document': '👁️ Podgląd dokumentu',
+    'update_status': '🔄 Zmiana statusu',
+    'add_comment': '💬 Dodanie komentarza',
+    'create_user': '👤 Utworzenie użytkownika',
+    'update_user': '✏️ Aktualizacja użytkownika'
   }
 
   const filtered = useMemo(() => {
@@ -849,23 +1136,23 @@ function AuditLog({ onClose }) {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div ref={modalRef} className="modal audit-log wide" onClick={e => e.stopPropagation()}>
+      <div ref={modalRef} className="modal audit-log wide" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="audit-title">
         <div className="modal-header">
-          <h2><BiText pl="Dziennik audytu" uk="Журнал аудиту" /></h2>
-          <button className="close-btn" onClick={onClose}>✕</button>
+          <h2 id="audit-title"><BiText pl="Dziennik audytu" uk="Журнал аудиту" /></h2>
+          <button className="close-btn" onClick={onClose} aria-label="Zamknij">✕</button>
         </div>
         <div className="modal-body">
-          <input type="text" placeholder="Filtr... / Фільтр..." value={filter} onChange={e => setFilter(e.target.value)} className="filter-input" />
+          <input type="search" placeholder="Filtr... / Фільтр..." value={filter} onChange={e => setFilter(e.target.value)} className="filter-input" aria-label="Filtruj logi" />
           {loading ? <div className="loading">...</div> : (
-            <div className="audit-list">
+            <div className="audit-list" role="log">
               {filtered.map(log => (
                 <div key={log.id} className="audit-item">
                   <div className="audit-header">
                     <span className="audit-action">{actionLabels[log.action] || log.action}</span>
-                    <time>{new Date(log.created_at).toLocaleString()}</time>
+                    <time dateTime={log.created_at}>{new Date(log.created_at).toLocaleString()}</time>
                   </div>
                   <div className="audit-user">
-                    {log.user?.full_name || log.user?.email || 'System'}
+                    <SafeText>{log.user?.full_name || log.user?.email || 'System'}</SafeText>
                     {log.user?.side && <span className={`side-badge ${log.user.side.toLowerCase()}`}>{log.user.side}</span>}
                   </div>
                   {log.details && <pre className="audit-details">{JSON.stringify(log.details, null, 2)}</pre>}
@@ -888,6 +1175,7 @@ function DocumentDetail({ document, onClose, onUpdate }) {
   const modalRef = useRef(null)
   const addToast = useToast()
   const profile = useProfile()
+  const safeSetState = useSafeAsync()
 
   const isSuperAdmin = profile?.role === 'super_admin'
   const isAdmin = isSuperAdmin || profile?.role === 'lawyer_admin'
@@ -905,9 +1193,9 @@ function DocumentDetail({ document, onClose, onUpdate }) {
   }, [onClose])
 
   useEffect(() => {
-    supabase.from('profiles').select('id, full_name, email, side').eq('is_active', true).then(({ data }) => setUsers(data || []))
+    supabase.from('profiles').select('id, full_name, email, side').eq('is_active', true).then(({ data }) => safeSetState(setUsers)(data || []))
     logAudit(profile?.id, 'view_document', 'document', document.id)
-  }, [])
+  }, [document.id, profile?.id, safeSetState])
 
   const updateStatus = async (status) => {
     await supabase.from('documents').update({ status, updated_at: new Date().toISOString() }).eq('id', doc.id)
@@ -927,35 +1215,39 @@ function DocumentDetail({ document, onClose, onUpdate }) {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div ref={modalRef} className="modal document-detail" onClick={e => e.stopPropagation()}>
+      <div ref={modalRef} className="modal document-detail" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="doc-title">
         <div className="modal-header">
           <div>
             <span className="doc-code">{doc.code}</span>
-            <h3 className="doc-title-pl">{doc.name_pl}</h3>
-            <p className="doc-title-uk">{doc.name_uk}</p>
+            <h3 id="doc-title" className="doc-title-pl"><SafeText>{doc.name_pl}</SafeText></h3>
+            <p className="doc-title-uk"><SafeText>{doc.name_uk}</SafeText></p>
           </div>
-          <button className="close-btn" onClick={onClose}>✕</button>
+          <button className="close-btn" onClick={onClose} aria-label="Zamknij">✕</button>
         </div>
 
         <div className="modal-body">
           <div className="doc-meta">
             <div className="meta-item">
-              <label><BiText pl="Status" uk="Статус" /></label>
-              <select value={doc.status || 'pending'} onChange={e => updateStatus(e.target.value)} disabled={!isAdmin}>
+              <label htmlFor="doc-status"><BiText pl="Status" uk="Статус" /></label>
+              <select id="doc-status" value={doc.status || 'pending'} onChange={e => updateStatus(e.target.value)} disabled={!isAdmin}>
                 {STATUS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.pl} / {opt.uk}</option>)}
               </select>
             </div>
             <div className="meta-item">
-              <label><BiText pl="Odpowiedzialny" uk="Відповідальний" /></label>
-              <select value={doc.responsible_user_id || ''} onChange={e => updateResponsible(e.target.value)} disabled={!isAdmin}>
+              <label htmlFor="doc-responsible"><BiText pl="Odpowiedzialny" uk="Відповідальний" /></label>
+              <select id="doc-responsible" value={doc.responsible_user_id || ''} onChange={e => updateResponsible(e.target.value)} disabled={!isAdmin}>
                 <option value="">— Nie przypisano / Не призначено —</option>
                 {users.map(u => <option key={u.id} value={u.id}>{u.full_name || u.email} ({u.side})</option>)}
               </select>
             </div>
           </div>
 
-          <FileUpload document={doc} onUpdate={onUpdate} canAdd={canAdd} canDelete={canDelete} canView={canView} />
-          <Comments document={doc} canComment={canComment} canView={canView} />
+          <ErrorBoundary>
+            <FileUpload document={doc} onUpdate={onUpdate} canAdd={canAdd} canDelete={canDelete} canView={canView} />
+          </ErrorBoundary>
+          <ErrorBoundary>
+            <Comments document={doc} canComment={canComment} canView={canView} />
+          </ErrorBoundary>
         </div>
       </div>
     </div>
@@ -963,7 +1255,7 @@ function DocumentDetail({ document, onClose, onUpdate }) {
 }
 
 // =====================================================
-// SECTION MANAGER (for Super Admin)
+// SECTION MANAGER
 // =====================================================
 function SectionManager({ company, sections, onUpdate, onClose }) {
   const [newSection, setNewSection] = useState({ code: '', name_pl: '', name_uk: '' })
@@ -977,16 +1269,16 @@ function SectionManager({ company, sections, onUpdate, onClose }) {
   const createSection = async (e) => {
     e.preventDefault()
     setCreating(true)
-    const { data, error } = await supabase.from('document_sections').insert({
+    const { error } = await supabase.from('document_sections').insert({
       company_id: company.id,
-      code: newSection.code,
-      name_pl: newSection.name_pl,
-      name_uk: newSection.name_uk,
+      code: sanitizeText(newSection.code),
+      name_pl: sanitizeText(newSection.name_pl),
+      name_uk: sanitizeText(newSection.name_uk),
       order_index: sections.length + 1,
       created_by: profile.id
-    }).select().single()
+    })
 
-    if (!error && data) {
+    if (!error) {
       setNewSection({ code: '', name_pl: '', name_uk: '' })
       onUpdate()
       addToast('Sekcja utworzona / Розділ створено', 'success')
@@ -1003,16 +1295,16 @@ function SectionManager({ company, sections, onUpdate, onClose }) {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div ref={modalRef} className="modal section-manager" onClick={e => e.stopPropagation()}>
+      <div ref={modalRef} className="modal section-manager" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
         <div className="modal-header">
           <h2><BiText pl="Zarządzanie sekcjami" uk="Управління розділами" /></h2>
-          <button className="close-btn" onClick={onClose}>✕</button>
+          <button className="close-btn" onClick={onClose} aria-label="Zamknij">✕</button>
         </div>
         <div className="modal-body">
           <form onSubmit={createSection} className="section-form">
-            <input placeholder="Kod (np. A)" value={newSection.code} onChange={e => setNewSection({...newSection, code: e.target.value})} required />
-            <input placeholder="Nazwa (PL)" value={newSection.name_pl} onChange={e => setNewSection({...newSection, name_pl: e.target.value})} required />
-            <input placeholder="Назва (UK)" value={newSection.name_uk} onChange={e => setNewSection({...newSection, name_uk: e.target.value})} required />
+            <input placeholder="Kod (np. A)" value={newSection.code} onChange={e => setNewSection({...newSection, code: e.target.value})} required maxLength={10} aria-label="Kod sekcji" />
+            <input placeholder="Nazwa (PL)" value={newSection.name_pl} onChange={e => setNewSection({...newSection, name_pl: e.target.value})} required aria-label="Nazwa polska" />
+            <input placeholder="Назва (UK)" value={newSection.name_uk} onChange={e => setNewSection({...newSection, name_uk: e.target.value})} required aria-label="Nazwa ukraińska" />
             <button type="submit" disabled={creating}>{creating ? '...' : '+ Dodaj / Додати'}</button>
           </form>
 
@@ -1020,8 +1312,8 @@ function SectionManager({ company, sections, onUpdate, onClose }) {
             {sections.map(s => (
               <div key={s.id} className="section-item">
                 <span className="section-code">{s.code}</span>
-                <span className="section-name">{s.name_pl} / {s.name_uk}</span>
-                <button onClick={() => deleteSection(s.id)} className="btn-danger">🗑️</button>
+                <span className="section-name"><SafeText>{s.name_pl}</SafeText> / <SafeText>{s.name_uk}</SafeText></span>
+                <button onClick={() => deleteSection(s.id)} className="btn-danger" aria-label={`Usuń sekcję ${s.code}`}>🗑️</button>
               </div>
             ))}
           </div>
@@ -1038,17 +1330,43 @@ function NotificationsBell() {
   const [notifications, setNotifications] = useState([])
   const [showDropdown, setShowDropdown] = useState(false)
   const profile = useProfile()
+  const safeSetState = useSafeAsync()
+  const channelRef = useRef(null)
 
   useEffect(() => {
     const load = async () => {
       if (!profile?.id) return
-      const { data } = await supabase.from('notifications').select('*').eq('user_id', profile.id).eq('is_read', false).order('created_at', { ascending: false }).limit(10)
-      setNotifications(data || [])
+      const { data } = await supabase
+        .from('notifications')
+        .select('*')
+        .eq('user_id', profile.id)
+        .eq('is_read', false)
+        .order('created_at', { ascending: false })
+        .limit(10)
+      safeSetState(setNotifications)(data || [])
     }
     load()
-    const interval = setInterval(load, 30000)
-    return () => clearInterval(interval)
-  }, [profile?.id])
+
+    if (profile?.id && isValidUUID(profile.id)) {
+      channelRef.current = supabase
+        .channel(`notifications_${profile.id}`)
+        .on('postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'notifications' },
+          (payload) => {
+            if (payload.new.user_id === profile.id) {
+              load()
+            }
+          }
+        )
+        .subscribe()
+    }
+
+    return () => {
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current)
+      }
+    }
+  }, [profile?.id, safeSetState])
 
   const markAsRead = async (id) => {
     await supabase.from('notifications').update({ is_read: true }).eq('id', id)
@@ -1062,23 +1380,29 @@ function NotificationsBell() {
 
   return (
     <div className="notifications-bell">
-      <button onClick={() => setShowDropdown(!showDropdown)} className="bell-btn">
-        🔔 {notifications.length > 0 && <span className="badge">{notifications.length}</span>}
+      <button
+        onClick={() => setShowDropdown(!showDropdown)}
+        className="bell-btn"
+        aria-label={`Powiadomienia (${notifications.length} nieprzeczytanych)`}
+        aria-expanded={showDropdown}
+        aria-haspopup="true"
+      >
+        🔔 {notifications.length > 0 && <span className="badge" aria-hidden="true">{notifications.length}</span>}
       </button>
       {showDropdown && (
-        <div className="notifications-dropdown">
+        <div className="notifications-dropdown" role="menu" aria-label="Powiadomienia">
           <div className="notif-header">
             <BiText pl="Powiadomienia" uk="Сповіщення" />
-            {notifications.length > 0 && <button onClick={markAllRead}>Oznacz wszystkie / Прочитати все</button>}
+            {notifications.length > 0 && <button onClick={markAllRead}>✓ Wszystko</button>}
           </div>
           {notifications.length === 0 ? (
             <div className="no-notif"><BiText pl="Brak powiadomień" uk="Немає сповіщень" /></div>
           ) : (
             notifications.map(n => (
-              <div key={n.id} className="notif-item" onClick={() => markAsRead(n.id)}>
-                <strong>{n.title}</strong>
-                <p>{n.message}</p>
-                <time>{new Date(n.created_at).toLocaleString()}</time>
+              <div key={n.id} className="notif-item" onClick={() => markAsRead(n.id)} role="menuitem" tabIndex={0} onKeyPress={e => e.key === 'Enter' && markAsRead(n.id)}>
+                <strong><SafeText>{n.title}</SafeText></strong>
+                <p><SafeText>{n.message}</SafeText></p>
+                <time dateTime={n.created_at}>{new Date(n.created_at).toLocaleString()}</time>
               </div>
             ))
           )}
@@ -1106,6 +1430,7 @@ function AppContent() {
   const [showSectionManager, setShowSectionManager] = useState(false)
   const [showChat, setShowChat] = useState(false)
   const addToast = useToast()
+  const safeSetState = useSafeAsync()
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -1123,23 +1448,23 @@ function AppContent() {
 
   const loadProfile = async (userId) => {
     const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
-    setProfile(data)
+    safeSetState(setProfile)(data)
     loadCompanies()
   }
 
   const loadCompanies = async () => {
     const { data } = await supabase.from('companies').select('*').order('order_index')
-    setCompanies(data || [])
-    if (data?.length > 0) setSelectedCompany(data[0])
-    setLoading(false)
+    safeSetState(setCompanies)(data || [])
+    if (data?.length > 0) safeSetState(setSelectedCompany)(data[0])
+    safeSetState(setLoading)(false)
   }
 
   const loadSections = useCallback(async () => {
     if (!selectedCompany) return
     const { data } = await supabase.from('document_sections').select('*').eq('company_id', selectedCompany.id).is('parent_section_id', null).order('order_index')
-    setSections(data || [])
-    if (data?.length > 0 && !activeSection) setActiveSection(data[0])
-  }, [selectedCompany])
+    safeSetState(setSections)(data || [])
+    if (data?.length > 0 && !activeSection) safeSetState(setActiveSection)(data[0])
+  }, [selectedCompany, activeSection, safeSetState])
 
   useEffect(() => { if (selectedCompany) loadSections() }, [selectedCompany, loadSections])
 
@@ -1147,21 +1472,27 @@ function AppContent() {
     if (!activeSection) return
     const { data: subSections } = await supabase.from('document_sections').select('id').eq('parent_section_id', activeSection.id)
     const sectionIds = [activeSection.id, ...(subSections || []).map(s => s.id)]
-    const { data } = await supabase.from('documents').select('*, responsible:profiles!documents_responsible_user_id_fkey(full_name, email, side)').in('section_id', sectionIds).order('order_index')
-    setDocuments(data || [])
-  }, [activeSection])
+
+    const { data } = await supabase
+      .from('documents')
+      .select('*, responsible:profiles!documents_responsible_user_id_fkey(full_name, email, side)')
+      .in('section_id', sectionIds)
+      .order('order_index')
+    safeSetState(setDocuments)(data || [])
+  }, [activeSection, safeSetState])
 
   useEffect(() => { if (activeSection) loadDocuments() }, [activeSection, loadDocuments])
 
   const updateStatus = async (docId, status) => {
+    if (!isValidUUID(docId)) return
     await supabase.from('documents').update({ status, updated_at: new Date().toISOString() }).eq('id', docId)
     await logAudit(profile.id, 'update_status', 'document', docId, { status })
     loadDocuments()
   }
 
-  if (loading) return <div className="loading">Ładowanie... / Завантаження...</div>
+  if (loading) return <div className="loading" role="status" aria-live="polite">Ładowanie... / Завантаження...</div>
   if (!session) return <Auth />
-  if (!profile) return <div className="loading">Ładowanie profilu... / Завантаження профілю...</div>
+  if (!profile) return <div className="loading" role="status" aria-live="polite">Ładowanie profilu... / Завантаження профілю...</div>
 
   const isSuperAdmin = profile.role === 'super_admin'
   const isAdmin = isSuperAdmin || profile.role === 'lawyer_admin'
@@ -1172,17 +1503,19 @@ function AppContent() {
   return (
     <ProfileContext.Provider value={profile}>
       <div className="app">
-        <header>
+        <a href="#main-content" className="skip-link">Przejdź do treści / Перейти до змісту</a>
+
+        <header role="banner">
           <div className="header-left">
             <h1>Audit System</h1>
-            <select value={selectedCompany?.id || ''} onChange={e => setSelectedCompany(companies.find(c => c.id === e.target.value))}>
+            <select value={selectedCompany?.id || ''} onChange={e => setSelectedCompany(companies.find(c => c.id === e.target.value))} aria-label="Wybierz firmę">
               {companies.map(c => <option key={c.id} value={c.id}>{c.name_pl} / {c.name_uk}</option>)}
             </select>
           </div>
 
           <div className="header-right">
             <div className="user-info">
-              <span className="user-name">{profile.full_name || profile.email}</span>
+              <span className="user-name"><SafeText>{profile.full_name || profile.email}</SafeText></span>
               <span className={`side-badge ${profile.side?.toLowerCase()}`}>{profile.side}</span>
               <span className="role-badge">{ROLES[profile.role]?.pl}</span>
             </div>
@@ -1191,83 +1524,133 @@ function AppContent() {
 
             {isSuperAdmin && (
               <>
-                <button onClick={() => setShowUserManagement(true)} title="Użytkownicy / Користувачі">👥</button>
-                <button onClick={() => setShowAuditLog(true)} title="Dziennik audytu / Журнал аудиту">📜</button>
-                <button onClick={() => setShowSectionManager(true)} title="Sekcje / Розділи">📁</button>
+                <button onClick={() => setShowUserManagement(true)} aria-label="Zarządzanie użytkownikami">👥</button>
+                <button onClick={() => setShowAuditLog(true)} aria-label="Dziennik audytu">📜</button>
+                <button onClick={() => setShowSectionManager(true)} aria-label="Zarządzanie sekcjami">📁</button>
               </>
             )}
 
-            <button onClick={() => setShowChat(true)} title="Czat / Чат">💬</button>
-            <button onClick={() => supabase.auth.signOut()} title="Wyloguj / Вийти">🚪</button>
+            <button onClick={() => setShowChat(true)} aria-label="Otwórz czat">💬</button>
+            <button onClick={() => supabase.auth.signOut()} aria-label="Wyloguj">🚪</button>
           </div>
         </header>
 
-        <div className="progress-bar">
+        <div
+          className="progress-bar"
+          role="progressbar"
+          aria-valuenow={progress}
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuetext={`${completedDocs} z ${totalDocs} dokumentów ukończonych (${progress}%)`}
+        >
           <div className="progress-track"><div className="progress" style={{ width: `${progress}%` }} /></div>
           <span>{completedDocs} / {totalDocs} ({progress}%)</span>
         </div>
 
-        <nav className="sections-nav">
+        <nav className="sections-nav" aria-label="Sekcje dokumentów" role="tablist">
           {sections.map(s => (
-            <button key={s.id} className={activeSection?.id === s.id ? 'active' : ''} onClick={() => setActiveSection(s)}>
+            <button
+              key={s.id}
+              className={activeSection?.id === s.id ? 'active' : ''}
+              onClick={() => setActiveSection(s)}
+              role="tab"
+              aria-selected={activeSection?.id === s.id}
+              aria-controls="main-content"
+            >
               <span className="section-code">{s.code}.</span>
-              <span className="section-name-pl">{s.name_pl}</span>
-              <span className="section-name-uk">{s.name_uk}</span>
+              <span className="section-name-pl"><SafeText>{s.name_pl}</SafeText></span>
+              <span className="section-name-uk"><SafeText>{s.name_uk}</SafeText></span>
             </button>
           ))}
         </nav>
 
-        <main>
+        <main id="main-content" role="tabpanel">
           <div className="section-header">
             <h2>
               <span className="code">{activeSection?.code}.</span>
-              <span className="name-pl">{activeSection?.name_pl}</span>
-              <span className="name-uk">{activeSection?.name_uk}</span>
+              <span className="name-pl"><SafeText>{activeSection?.name_pl}</SafeText></span>
+              <span className="name-uk"><SafeText>{activeSection?.name_uk}</SafeText></span>
             </h2>
           </div>
 
-          <div className="documents-list">
+          <div className="documents-list" role="list" aria-label="Lista dokumentów">
             {documents.map(doc => (
-              <div key={doc.id} className={`doc-item ${doc.status || 'pending'}`} onClick={() => setSelectedDocument(doc)}>
+              <article
+                key={doc.id}
+                className={`doc-item ${doc.status || 'pending'}`}
+                onClick={() => setSelectedDocument(doc)}
+                tabIndex={0}
+                onKeyPress={e => e.key === 'Enter' && setSelectedDocument(doc)}
+                role="listitem"
+                aria-label={`${doc.code} - ${doc.name_pl}`}
+              >
                 <div className="doc-info">
                   <span className="doc-code">{doc.code}</span>
                   <div className="doc-names">
-                    <span className="name-pl">{doc.name_pl}</span>
-                    <span className="name-uk">{doc.name_uk}</span>
+                    <span className="name-pl"><SafeText>{doc.name_pl}</SafeText></span>
+                    <span className="name-uk"><SafeText>{doc.name_uk}</SafeText></span>
                   </div>
                 </div>
                 {doc.responsible && (
                   <span className="doc-responsible">
-                    {doc.responsible.full_name || doc.responsible.email}
+                    <SafeText>{doc.responsible.full_name || doc.responsible.email}</SafeText>
                     <span className={`side-badge small ${doc.responsible.side?.toLowerCase()}`}>{doc.responsible.side}</span>
                   </span>
                 )}
-                <select value={doc.status || 'pending'} onChange={e => { e.stopPropagation(); updateStatus(doc.id, e.target.value) }} onClick={e => e.stopPropagation()} disabled={!isAdmin}>
+                <select
+                  value={doc.status || 'pending'}
+                  onChange={e => { e.stopPropagation(); updateStatus(doc.id, e.target.value) }}
+                  onClick={e => e.stopPropagation()}
+                  disabled={!isAdmin}
+                  aria-label={`Status dokumentu ${doc.code}`}
+                >
                   {STATUS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.pl}</option>)}
                 </select>
-              </div>
+              </article>
             ))}
             {documents.length === 0 && <div className="no-docs"><BiText pl="Brak dokumentów" uk="Немає документів" /></div>}
           </div>
         </main>
 
-        {showUserManagement && <UserManagement onClose={() => setShowUserManagement(false)} />}
-        {showAuditLog && <AuditLog onClose={() => setShowAuditLog(false)} />}
-        {showSectionManager && selectedCompany && <SectionManager company={selectedCompany} sections={sections} onUpdate={loadSections} onClose={() => setShowSectionManager(false)} />}
-        {selectedDocument && <DocumentDetail document={selectedDocument} onClose={() => setSelectedDocument(null)} onUpdate={loadDocuments} />}
-        {showChat && <Chat onClose={() => setShowChat(false)} />}
+        {showUserManagement && (
+          <ErrorBoundary>
+            <UserManagement onClose={() => setShowUserManagement(false)} />
+          </ErrorBoundary>
+        )}
+        {showAuditLog && (
+          <ErrorBoundary>
+            <AuditLog onClose={() => setShowAuditLog(false)} />
+          </ErrorBoundary>
+        )}
+        {showSectionManager && selectedCompany && (
+          <ErrorBoundary>
+            <SectionManager company={selectedCompany} sections={sections} onUpdate={loadSections} onClose={() => setShowSectionManager(false)} />
+          </ErrorBoundary>
+        )}
+        {selectedDocument && (
+          <ErrorBoundary>
+            <DocumentDetail document={selectedDocument} onClose={() => setSelectedDocument(null)} onUpdate={loadDocuments} />
+          </ErrorBoundary>
+        )}
+        {showChat && (
+          <ErrorBoundary>
+            <Chat onClose={() => setShowChat(false)} />
+          </ErrorBoundary>
+        )}
       </div>
     </ProfileContext.Provider>
   )
 }
 
 // =====================================================
-// APP WITH PROVIDERS
+// APP WITH ERROR BOUNDARY & PROVIDERS
 // =====================================================
 export default function App() {
   return (
-    <ToastProvider>
-      <AppContent />
-    </ToastProvider>
+    <ErrorBoundary>
+      <ToastProvider>
+        <AppContent />
+      </ToastProvider>
+    </ErrorBoundary>
   )
 }
