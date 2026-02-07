@@ -35,6 +35,9 @@ const USERS_PAGE_SIZE = 20
 const LANGUAGE_MODES = ['auto', 'pl', 'uk']
 const SIDE_DEFAULT_LANGUAGE = { FNU: 'uk', OPERATOR: 'pl' }
 const TRANSLATION_TIMEOUT_MS = 6000
+const LLM_MAX_RETRIES = 3
+const TRANSLATE_CACHE_TTL_MS = 30 * 60 * 1000
+const SUGGEST_CACHE_TTL_MS = 10 * 60 * 1000
 
 const ALLOWED_FILE_TYPES = [
   'application/pdf',
@@ -52,6 +55,9 @@ const FILE_ICONS = {
   'pdf': '📕', 'doc': '📘', 'docx': '📘', 'xls': '📗',
   'xlsx': '📗', 'txt': '📄', 'csv': '📊', 'default': '📎'
 }
+
+const translateCache = new Map()
+const suggestCache = new Map()
 
 // =====================================================
 // ERROR BOUNDARY (Critical for Production)
@@ -195,10 +201,61 @@ async function callWithTimeout(promise, timeoutMs) {
   ])
 }
 
+function makeTranslateCacheKey(text, source, target) {
+  return `${source}|${target}|${text}`
+}
+
+function makeSuggestCacheKey(prefix, language, context) {
+  const contextHint = (context || '').slice(0, 600)
+  return `${language}|${prefix}|${contextHint}`
+}
+
+function getCachedValue(cache, key, ttlMs) {
+  const entry = cache.get(key)
+  if (!entry) return null
+  if (Date.now() - entry.ts > ttlMs) {
+    cache.delete(key)
+    return null
+  }
+  return entry.value
+}
+
+function setCachedValue(cache, key, value) {
+  cache.set(key, { value, ts: Date.now() })
+}
+
+function sanitizeLlmContext(text) {
+  if (!text || typeof text !== 'string') return ''
+  return sanitizeText(text)
+    .replace(/ignore\s+previous\s+instructions/gi, '')
+    .replace(/system\s*prompt/gi, '')
+    .replace(/developer\s*message/gi, '')
+    .replace(/reveal\s+all\s+data/gi, '')
+    .slice(0, 2800)
+}
+
+async function callLlmWithRetry(requestFactory, fallbackValue) {
+  for (let attempt = 0; attempt < LLM_MAX_RETRIES; attempt++) {
+    try {
+      const result = await requestFactory()
+      return result
+    } catch (error) {
+      if (attempt === LLM_MAX_RETRIES - 1) return fallbackValue
+      const backoffMs = 250 * Math.pow(2, attempt)
+      await new Promise(resolve => setTimeout(resolve, backoffMs))
+    }
+  }
+  return fallbackValue
+}
+
 async function llmTranslateStrict(text, source, target) {
   // Expected Edge Function contract: { translated_text: string }
   if (!text || source === target) return text || ''
-  try {
+  const cacheKey = makeTranslateCacheKey(text, source, target)
+  const cached = getCachedValue(translateCache, cacheKey, TRANSLATE_CACHE_TTL_MS)
+  if (cached) return cached
+
+  return await callLlmWithRetry(async () => {
     const { data, error } = await callWithTimeout(
       supabase.functions.invoke('smart-api', {
         body: {
@@ -214,23 +271,28 @@ async function llmTranslateStrict(text, source, target) {
     )
     if (error) throw error
     const translated = sanitizeText(data?.translated_text || '')
-    return translated || text
-  } catch {
-    return text
-  }
+    const finalValue = translated || text
+    setCachedValue(translateCache, cacheKey, finalValue)
+    return finalValue
+  }, text)
 }
 
 async function llmSuggestCompletions(prefix, language, context = '') {
   // Expected Edge Function contract: { suggestions: string[] }
   if (!prefix || prefix.trim().length < 3) return []
-  try {
+  const cleanContext = sanitizeLlmContext(context)
+  const cacheKey = makeSuggestCacheKey(prefix.trim(), language, cleanContext)
+  const cached = getCachedValue(suggestCache, cacheKey, SUGGEST_CACHE_TTL_MS)
+  if (cached) return cached
+
+  return await callLlmWithRetry(async () => {
     const { data, error } = await callWithTimeout(
       supabase.functions.invoke('smart-api', {
         body: {
           mode: 'suggest',
           language,
           text: prefix.trim(),
-          context: sanitizeText(context || ''),
+          context: cleanContext,
           max_items: MAX_LLM_SUGGESTIONS,
           strict: true,
           system_instruction: 'Return 1-3 short continuation options in the same language, based on provided context. No extra commentary.'
@@ -240,10 +302,10 @@ async function llmSuggestCompletions(prefix, language, context = '') {
     )
     if (error) throw error
     const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : []
-    return suggestions.map(s => sanitizeText(String(s))).filter(Boolean).slice(0, MAX_LLM_SUGGESTIONS)
-  } catch {
-    return []
-  }
+    const finalSuggestions = suggestions.map(s => sanitizeText(String(s))).filter(Boolean).slice(0, MAX_LLM_SUGGESTIONS)
+    setCachedValue(suggestCache, cacheKey, finalSuggestions)
+    return finalSuggestions
+  }, [])
 }
 
 function resolveDisplayedText(item, displayLanguage) {
@@ -652,7 +714,7 @@ const CommentItem = ({ comment, depth, maxDepth, onReply, onToggleVisibility, ca
       </div>
       <p className="comment-content"><SafeText>{renderedContent}</SafeText></p>
       {comment.source_language && comment.source_language !== displayLanguage && (
-        <p className="comment-meta">LLM translate: {comment.source_language.toUpperCase()} → {displayLanguage.toUpperCase()}</p>
+        <p className="comment-meta">Auto: {comment.source_language.toUpperCase()} → {displayLanguage.toUpperCase()}</p>
       )}
       <div className="comment-actions">
         {canComment && depth < maxDepth - 1 && (
@@ -806,7 +868,9 @@ function Chat({
   contextHint,
   companies = [],
   selectedCompanyId,
-  activeSectionId
+  activeSectionId,
+  dockMode = 'panel',
+  onDockModeChange
 }) {
   const [messages, setMessages] = useState([])
   const [attachmentsByMessage, setAttachmentsByMessage] = useState({})
@@ -816,7 +880,6 @@ function Chat({
   const [pendingFiles, setPendingFiles] = useState([])
   const [llmSuggestions, setLlmSuggestions] = useState([])
   const [loadingSuggestions, setLoadingSuggestions] = useState(false)
-  const [chatSize, setChatSize] = useState('regular')
   const [sending, setSending] = useState(false)
   const [userSearch, setUserSearch] = useState('')
   const [targetCompanyId, setTargetCompanyId] = useState(selectedCompanyId || '')
@@ -837,6 +900,7 @@ function Chat({
     () => resolveLanguageMode(displayLanguageMode, profile?.side),
     [displayLanguageMode, profile?.side]
   )
+  const isCollapsed = dockMode === 'collapsed'
 
   useEffect(() => {
     if (selectedCompanyId) setTargetCompanyId(selectedCompanyId)
@@ -1195,19 +1259,23 @@ function Chat({
   }
 
   return (
-    <div className={`chat-panel chat-size-${chatSize}`} role="region" aria-label="Czat / Чат">
+    <div className={`chat-panel dock-${dockMode}`} role="region" aria-label="Czat / Чат">
       <div className="chat-header">
         <div className="chat-title-stack">
           <BiText pl="Czat (aktywny)" uk="Чат (активний)" />
-          <small>LLM Translator only: PL ↔ UK</small>
-          {contextHint && <small className="chat-context">Context: <SafeText>{contextHint}</SafeText></small>}
+          <small>Auto PL ↔ UK</small>
+          {contextHint && <small className="chat-context">Kontekst / Контекст: <SafeText>{contextHint}</SafeText></small>}
         </div>
         <div className="chat-language-controls">
-          <label htmlFor="chat-size-mode">Widok</label>
-          <select id="chat-size-mode" value={chatSize} onChange={e => setChatSize(e.target.value)}>
-            <option value="compact">Compact</option>
-            <option value="regular">Regular</option>
-            <option value="expanded">Expanded</option>
+          <label htmlFor="chat-dock-mode"><BiText pl="Widok" uk="Вигляд" /></label>
+          <select
+            id="chat-dock-mode"
+            value={dockMode}
+            onChange={e => onDockModeChange?.(e.target.value)}
+          >
+            <option value="collapsed">Compact / Компакт</option>
+            <option value="panel">Panel / Панель</option>
+            <option value="focus">Focus / Фокус</option>
           </select>
           <label htmlFor="chat-language-mode">Język / Мова</label>
           <select
@@ -1226,7 +1294,7 @@ function Chat({
         </div>
       </div>
 
-      <div className="chat-body">
+      {!isCollapsed && <div className="chat-body">
         <div className="chat-users">
           <input
             type="search"
@@ -1276,7 +1344,7 @@ function Chat({
                     </div>
                     <p className="message-content"><SafeText>{resolveDisplayedText(m, displayLanguage)}</SafeText></p>
                     {m.source_language && m.source_language !== displayLanguage && (
-                      <span className="message-translation-meta">LLM translate: {m.source_language.toUpperCase()} → {displayLanguage.toUpperCase()}</span>
+                      <span className="message-translation-meta">Auto: {m.source_language.toUpperCase()} → {displayLanguage.toUpperCase()}</span>
                     )}
                     {(attachmentsByMessage[m.id] || []).length > 0 && (
                       <div className="message-attachments">
@@ -1335,7 +1403,7 @@ function Chat({
                 <button type="submit" disabled={sending || (!newMessage.trim() && pendingFiles.length === 0)} aria-label="Wyślij wiadomość">📤</button>
               </form>
               <div className="llm-suggestions" aria-live="polite">
-                <span className="llm-label">LLM T9</span>
+                <span className="llm-label">T9</span>
                 {loadingSuggestions ? (
                   <span className="llm-hint">...</span>
                 ) : (
@@ -1349,7 +1417,7 @@ function Chat({
             <div className="select-user"><BiText pl="Wybierz kontakt" uk="Виберіть контакт" /></div>
           )}
         </div>
-      </div>
+      </div>}
     </div>
   )
 }
@@ -1511,21 +1579,50 @@ function UserManagement({ onClose }) {
 function AuditLog({ onClose }) {
   const [logs, setLogs] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
+  const [page, setPage] = useState(0)
   const [filter, setFilter] = useState('')
   const debouncedFilter = useDebounce(filter, 300)
   const modalRef = useRef(null)
   const safeSetState = useSafeAsync()
+  const PAGE_SIZE = 60
 
   useFocusTrap(modalRef, true)
 
+  const loadPage = useCallback(async (pageIndex = 0, append = false) => {
+    const from = pageIndex * PAGE_SIZE
+    const to = from + PAGE_SIZE - 1
+    const { data } = await supabase
+      .from('audit_log')
+      .select('*, user:user_id(full_name, email, side)')
+      .order('created_at', { ascending: false })
+      .range(from, to)
+
+    const rows = data || []
+    if (append) {
+      safeSetState(setLogs)(prev => [...prev, ...rows])
+    } else {
+      safeSetState(setLogs)(rows)
+    }
+    safeSetState(setHasMore)(rows.length === PAGE_SIZE)
+    safeSetState(setPage)(pageIndex)
+  }, [safeSetState])
+
   useEffect(() => {
-    const load = async () => {
-      const { data } = await supabase.from('audit_log').select('*, user:user_id(full_name, email, side)').order('created_at', { ascending: false }).limit(500)
-      safeSetState(setLogs)(data || [])
+    const loadInitial = async () => {
+      await loadPage(0, false)
       safeSetState(setLoading)(false)
     }
-    load()
-  }, [safeSetState])
+    loadInitial()
+  }, [loadPage, safeSetState])
+
+  const loadMore = async () => {
+    if (loadingMore || !hasMore) return
+    setLoadingMore(true)
+    await loadPage(page + 1, true)
+    setLoadingMore(false)
+  }
 
   const actionLabels = {
     'upload_file': '📤 Przesłanie pliku',
@@ -1555,21 +1652,29 @@ function AuditLog({ onClose }) {
         <div className="modal-body">
           <input type="search" placeholder="Filtr... / Фільтр..." value={filter} onChange={e => setFilter(e.target.value)} className="filter-input" aria-label="Filtruj logi" />
           {loading ? <div className="loading">...</div> : (
-            <div className="audit-list" role="log">
-              {filtered.map(log => (
-                <div key={log.id} className="audit-item">
-                  <div className="audit-header">
-                    <span className="audit-action">{actionLabels[log.action] || log.action}</span>
-                    <time dateTime={log.created_at}>{new Date(log.created_at).toLocaleString()}</time>
+            <>
+              <div className="audit-list" role="log">
+                {filtered.map(log => (
+                  <div key={log.id} className="audit-item">
+                    <div className="audit-header">
+                      <span className="audit-action">{actionLabels[log.action] || log.action}</span>
+                      <time dateTime={log.created_at}>{new Date(log.created_at).toLocaleString()}</time>
+                    </div>
+                    <div className="audit-user">
+                      <SafeText>{log.user?.full_name || log.user?.email || 'System'}</SafeText>
+                      {log.user?.side && <span className={`side-badge ${log.user.side.toLowerCase()}`}>{log.user.side}</span>}
+                    </div>
+                    {log.details && <pre className="audit-details">{JSON.stringify(log.details, null, 2)}</pre>}
                   </div>
-                  <div className="audit-user">
-                    <SafeText>{log.user?.full_name || log.user?.email || 'System'}</SafeText>
-                    {log.user?.side && <span className={`side-badge ${log.user.side.toLowerCase()}`}>{log.user.side}</span>}
-                  </div>
-                  {log.details && <pre className="audit-details">{JSON.stringify(log.details, null, 2)}</pre>}
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+              <div className="audit-footer">
+                <span>{logs.length} / {hasMore ? '...' : logs.length}</span>
+                <button onClick={loadMore} disabled={!hasMore || loadingMore}>
+                  {loadingMore ? '...' : 'Więcej / Більше'}
+                </button>
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -1823,6 +1928,37 @@ function NotificationsBell() {
   )
 }
 
+function SmartInbox({ documents, profile }) {
+  const critical = useMemo(() => (documents || []).filter(d => d.status === 'missing'), [documents])
+  const inProgress = useMemo(() => (documents || []).filter(d => d.status === 'in_progress'), [documents])
+  const unassigned = useMemo(() => (documents || []).filter(d => !d.responsible_user_id), [documents])
+  const myDocs = useMemo(() => (documents || []).filter(d => d.responsible_user_id === profile?.id), [documents, profile?.id])
+
+  const cards = [
+    { id: 'critical', titlePl: 'Krytyczne braki', titleUk: 'Критичні відсутності', value: critical.length, tone: 'danger' },
+    { id: 'progress', titlePl: 'W trakcie', titleUk: 'В роботі', value: inProgress.length, tone: 'warning' },
+    { id: 'unassigned', titlePl: 'Bez odpowiedzialnego', titleUk: 'Без відповідального', value: unassigned.length, tone: 'muted' },
+    { id: 'mine', titlePl: 'Moje dokumenty', titleUk: 'Мої документи', value: myDocs.length, tone: 'success' }
+  ]
+
+  return (
+    <section className="smart-inbox" aria-label="Smart Inbox">
+      <h4><BiText pl="Priorytety dnia" uk="Пріоритети дня" /></h4>
+      <div className="inbox-grid">
+        {cards.map(card => (
+          <article key={card.id} className={`inbox-card ${card.tone}`}>
+            <span className="inbox-value">{card.value}</span>
+            <span className="inbox-label">
+              <span className="text-pl">{card.titlePl}</span>
+              <span className="text-uk">{card.titleUk}</span>
+            </span>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 // =====================================================
 // MAIN APP COMPONENT
 // =====================================================
@@ -1839,6 +1975,12 @@ function AppContent() {
   const [showUserManagement, setShowUserManagement] = useState(false)
   const [showAuditLog, setShowAuditLog] = useState(false)
   const [showSectionManager, setShowSectionManager] = useState(false)
+  const [docSearch, setDocSearch] = useState('')
+  const [docStatusFilter, setDocStatusFilter] = useState('all')
+  const [chatDockMode, setChatDockMode] = useState(() => {
+    if (typeof window === 'undefined') return 'panel'
+    return window.localStorage.getItem('chat_dock_mode') || 'panel'
+  })
   const [chatLanguageMode, setChatLanguageMode] = useState(() => {
     if (typeof window === 'undefined') return 'auto'
     const cached = window.localStorage.getItem('chat_display_language')
@@ -1904,6 +2046,13 @@ function AppContent() {
     window.localStorage.setItem('chat_display_language', chatLanguageMode)
   }, [chatLanguageMode])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const allowed = ['collapsed', 'panel', 'focus']
+    if (!allowed.includes(chatDockMode)) return
+    window.localStorage.setItem('chat_dock_mode', chatDockMode)
+  }, [chatDockMode])
+
   const updateStatus = async (docId, status) => {
     if (!isValidUUID(docId)) return
     await supabase.from('documents').update({ status, updated_at: new Date().toISOString() }).eq('id', docId)
@@ -1917,8 +2066,16 @@ function AppContent() {
 
   const isSuperAdmin = profile.role === 'super_admin'
   const isAdmin = isSuperAdmin || profile.role === 'lawyer_admin'
-  const totalDocs = documents.length
-  const completedDocs = documents.filter(d => d.status === 'done').length
+  const q = docSearch.trim().toLowerCase()
+  const filteredDocuments = documents.filter(doc => {
+    const byStatus = docStatusFilter === 'all' ? true : (doc.status || 'pending') === docStatusFilter
+    const bySearch = !q
+      ? true
+      : [doc.code, doc.name_pl, doc.name_uk].some(v => (v || '').toLowerCase().includes(q))
+    return byStatus && bySearch
+  })
+  const totalDocs = filteredDocuments.length
+  const completedDocs = filteredDocuments.filter(d => d.status === 'done').length
   const progress = totalDocs > 0 ? Math.round((completedDocs / totalDocs) * 100) : 0
 
   return (
@@ -1984,53 +2141,101 @@ function AppContent() {
           ))}
         </nav>
 
-        <main id="main-content" role="tabpanel">
-          <div className="section-header">
-            <h2>
-              <span className="code">{activeSection?.code}.</span>
-              <span className="name-pl"><SafeText>{activeSection?.name_pl}</SafeText></span>
-              <span className="name-uk"><SafeText>{activeSection?.name_uk}</SafeText></span>
-            </h2>
-          </div>
+        <div className="workspace-layout">
+          <main id="main-content" role="tabpanel" className="content-pane">
+            <div className="section-header">
+              <h2>
+                <span className="code">{activeSection?.code}.</span>
+                <span className="name-pl"><SafeText>{activeSection?.name_pl}</SafeText></span>
+                <span className="name-uk"><SafeText>{activeSection?.name_uk}</SafeText></span>
+              </h2>
+            </div>
 
-          <div className="documents-list" role="list" aria-label="Lista dokumentów">
-            {documents.map(doc => (
-              <article
-                key={doc.id}
-                className={`doc-item ${doc.status || 'pending'}`}
-                onClick={() => setSelectedDocument(doc)}
-                tabIndex={0}
-                onKeyPress={e => e.key === 'Enter' && setSelectedDocument(doc)}
-                role="listitem"
-                aria-label={`${doc.code} - ${doc.name_pl}`}
-              >
-                <div className="doc-info">
-                  <span className="doc-code">{doc.code}</span>
-                  <div className="doc-names">
-                    <span className="name-pl"><SafeText>{doc.name_pl}</SafeText></span>
-                    <span className="name-uk"><SafeText>{doc.name_uk}</SafeText></span>
-                  </div>
-                </div>
-                {doc.responsible && (
-                  <span className="doc-responsible">
-                    <SafeText>{doc.responsible.full_name || doc.responsible.email}</SafeText>
-                    <span className={`side-badge small ${doc.responsible.side?.toLowerCase()}`}>{doc.responsible.side}</span>
-                  </span>
-                )}
-                <select
-                  value={doc.status || 'pending'}
-                  onChange={e => { e.stopPropagation(); updateStatus(doc.id, e.target.value) }}
-                  onClick={e => e.stopPropagation()}
-                  disabled={!isAdmin}
-                  aria-label={`Status dokumentu ${doc.code}`}
-                >
-                  {STATUS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.pl}</option>)}
+            <div className="context-toolbar">
+              <div className="context-chip">
+                <BiText pl="Kontekst sekcji" uk="Контекст секції" />
+                <strong><SafeText>{activeSection?.name_pl || '—'}</SafeText></strong>
+              </div>
+              <div className="context-chip">
+                <BiText pl="Filtr statusu" uk="Фільтр статусу" />
+                <select value={docStatusFilter} onChange={e => setDocStatusFilter(e.target.value)} aria-label="Filtr statusu">
+                  <option value="all">Wszystkie / Усі</option>
+                  {STATUS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.pl} / {opt.uk}</option>)}
                 </select>
-              </article>
-            ))}
-            {documents.length === 0 && <div className="no-docs"><BiText pl="Brak dokumentów" uk="Немає документів" /></div>}
-          </div>
-        </main>
+              </div>
+              <div className="context-chip search">
+                <BiText pl="Szukaj dokumentu" uk="Пошук документа" />
+                <input
+                  type="search"
+                  value={docSearch}
+                  onChange={e => setDocSearch(e.target.value)}
+                  placeholder="Kod, nazwa... / Код, назва..."
+                  aria-label="Szukaj dokumentu"
+                />
+              </div>
+            </div>
+
+            <div className="documents-list" role="list" aria-label="Lista dokumentów">
+              {filteredDocuments.map(doc => (
+                <article
+                  key={doc.id}
+                  className={`doc-item ${doc.status || 'pending'}`}
+                  onClick={() => setSelectedDocument(doc)}
+                  tabIndex={0}
+                  onKeyPress={e => e.key === 'Enter' && setSelectedDocument(doc)}
+                  role="listitem"
+                  aria-label={`${doc.code} - ${doc.name_pl}`}
+                >
+                  <div className="doc-info">
+                    <span className="doc-code">{doc.code}</span>
+                    <div className="doc-names">
+                      <span className="name-pl"><SafeText>{doc.name_pl}</SafeText></span>
+                      <span className="name-uk"><SafeText>{doc.name_uk}</SafeText></span>
+                    </div>
+                  </div>
+                  {doc.responsible && (
+                    <span className="doc-responsible">
+                      <SafeText>{doc.responsible.full_name || doc.responsible.email}</SafeText>
+                      <span className={`side-badge small ${doc.responsible.side?.toLowerCase()}`}>{doc.responsible.side}</span>
+                    </span>
+                  )}
+                  <select
+                    value={doc.status || 'pending'}
+                    onChange={e => { e.stopPropagation(); updateStatus(doc.id, e.target.value) }}
+                    onClick={e => e.stopPropagation()}
+                    disabled={!isAdmin}
+                    aria-label={`Status dokumentu ${doc.code}`}
+                  >
+                    {STATUS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.pl}</option>)}
+                  </select>
+                </article>
+              ))}
+              {filteredDocuments.length === 0 && <div className="no-docs"><BiText pl="Brak dokumentów" uk="Немає документів" /></div>}
+            </div>
+          </main>
+
+          <aside className="right-rail" aria-label="Panel boczny / Бічна панель">
+            <SmartInbox documents={documents} profile={profile} />
+            <ErrorBoundary>
+              <Chat
+                displayLanguageMode={chatLanguageMode}
+                onDisplayLanguageModeChange={setChatLanguageMode}
+                dockMode={chatDockMode}
+                onDockModeChange={setChatDockMode}
+                contextHint={
+                  selectedDocument
+                    ? `${selectedDocument.code} ${selectedDocument.name_pl}`
+                    : activeSection
+                      ? `${activeSection.code} ${activeSection.name_pl}`
+                      : ''
+                }
+                companies={companies}
+                selectedCompanyId={selectedCompany?.id}
+                activeSectionId={activeSection?.id}
+              />
+            </ErrorBoundary>
+          </aside>
+        </div>
 
         {showUserManagement && (
           <ErrorBoundary>
@@ -2057,22 +2262,6 @@ function AppContent() {
             />
           </ErrorBoundary>
         )}
-        <ErrorBoundary>
-          <Chat
-            displayLanguageMode={chatLanguageMode}
-            onDisplayLanguageModeChange={setChatLanguageMode}
-            contextHint={
-              selectedDocument
-                ? `${selectedDocument.code} ${selectedDocument.name_pl}`
-                : activeSection
-                  ? `${activeSection.code} ${activeSection.name_pl}`
-                  : ''
-            }
-            companies={companies}
-            selectedCompanyId={selectedCompany?.id}
-            activeSectionId={activeSection?.id}
-          />
-        </ErrorBoundary>
       </div>
     </ProfileContext.Provider>
   )
