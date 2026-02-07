@@ -498,6 +498,7 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
   const [loadingVersionsByFile, setLoadingVersionsByFile] = useState({})
   const [rollingBackVersionId, setRollingBackVersionId] = useState(null)
   const [previewFile, setPreviewFile] = useState(null)
+  const [previewMode, setPreviewMode] = useState('frame')
   const [previewUrl, setPreviewUrl] = useState('')
   const [previewText, setPreviewText] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -825,6 +826,7 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
 
   const openInlinePreview = async (file) => {
     setPreviewFile(file)
+    setPreviewMode('frame')
     setEditingText(false)
     setPreviewText('')
     if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl)
@@ -840,10 +842,15 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
         if (error) throw error
         const text = await data.text()
         setPreviewText(text)
+        setPreviewMode('text')
       } else {
-        const { data, error } = await supabase.storage.from('documents').createSignedUrl(file.file_path, 3600)
+        const { data, error } = await supabase.storage.from('documents').download(file.file_path)
         if (error) throw error
-        setPreviewUrl(data?.signedUrl || '')
+        const blobUrl = URL.createObjectURL(data)
+        setPreviewUrl(blobUrl)
+        const ext = (file.file_type || getFileExtension(file.file_name)).toLowerCase()
+        const previewable = ext === 'pdf' || ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)
+        setPreviewMode(previewable ? 'frame' : 'unsupported')
       }
       await logAudit(profile.id, 'view_file', 'document_file', document.id)
     } catch (err) {
@@ -866,10 +873,11 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
         }
       }
       const blob = new Blob([previewText], { type: previewFile.mime_type || 'text/plain' })
-      const { error: uploadError } = await supabase.storage
-        .from('documents')
-        .upload(previewFile.file_path, blob, { upsert: true })
-      if (uploadError) throw uploadError
+      const updateResult = await supabase.storage.from('documents').update(previewFile.file_path, blob)
+      if (updateResult.error) {
+        const fallbackUpload = await supabase.storage.from('documents').upload(previewFile.file_path, blob, { upsert: true })
+        if (fallbackUpload.error) throw fallbackUpload.error
+      }
 
       await supabase
         .from('document_files')
@@ -1045,7 +1053,7 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
             <div className="inline-preview-loading">Ładowanie... / Завантаження...</div>
           ) : (
             <>
-              {(previewFile.file_type === 'txt' || previewFile.file_type === 'csv' || (previewFile.mime_type || '').startsWith('text/')) ? (
+              {previewMode === 'text' ? (
                 editingText ? (
                   <textarea
                     className="inline-text-editor"
@@ -1056,6 +1064,10 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
                 ) : (
                   <pre className="inline-text-preview">{previewText}</pre>
                 )
+              ) : previewMode === 'unsupported' ? (
+                <div className="inline-preview-loading">
+                  Podgląd tego formatu wbudowanie nie jest wspierany / Вбудований перегляд цього формату не підтримується
+                </div>
               ) : (
                 <iframe className="inline-file-frame" src={previewUrl} title={previewFile.file_name} />
               )}
@@ -2255,6 +2267,8 @@ function DocumentDetail({ document, onClose, onUpdate, displayLanguage }) {
 // =====================================================
 function SectionManager({ company, sections, onUpdate, onClose }) {
   const [newSection, setNewSection] = useState({ code: getNextSectionCode(sections), name_pl: '', name_uk: '' })
+  const [parentSectionId, setParentSectionId] = useState('')
+  const [allSections, setAllSections] = useState([])
   const [creating, setCreating] = useState(false)
   const modalRef = useRef(null)
   const addToast = useToast()
@@ -2266,6 +2280,18 @@ function SectionManager({ company, sections, onUpdate, onClose }) {
     setNewSection(prev => ({ ...prev, code: getNextSectionCode(sections) }))
   }, [sections])
 
+  useEffect(() => {
+    const loadAllSections = async () => {
+      const { data } = await supabase
+        .from('document_sections')
+        .select('id, parent_section_id, code, name_pl, name_uk, order_index')
+        .eq('company_id', company.id)
+        .order('order_index')
+      setAllSections(data || [])
+    }
+    loadAllSections()
+  }, [company.id, sections])
+
   const createSection = async (e) => {
     e.preventDefault()
     setCreating(true)
@@ -2274,12 +2300,14 @@ function SectionManager({ company, sections, onUpdate, onClose }) {
       code: sanitizeText(newSection.code || getNextSectionCode(sections)),
       name_pl: sanitizeText(newSection.name_pl),
       name_uk: sanitizeText(newSection.name_uk),
+      parent_section_id: parentSectionId || null,
       order_index: sections.length + 1,
       created_by: profile.id
     })
 
     if (!error) {
       setNewSection({ code: getNextSectionCode(sections), name_pl: '', name_uk: '' })
+      setParentSectionId('')
       onUpdate()
       addToast('Sekcja utworzona / Розділ створено', 'success')
     }
@@ -2305,11 +2333,17 @@ function SectionManager({ company, sections, onUpdate, onClose }) {
             <input placeholder="Kod auto" value={newSection.code} readOnly maxLength={10} aria-label="Kod sekcji (auto)" />
             <input placeholder="Nazwa (PL)" value={newSection.name_pl} onChange={e => setNewSection({...newSection, name_pl: e.target.value})} required aria-label="Nazwa polska" />
             <input placeholder="Назва (UK)" value={newSection.name_uk} onChange={e => setNewSection({...newSection, name_uk: e.target.value})} required aria-label="Nazwa ukraińska" />
+            <select value={parentSectionId} onChange={e => setParentSectionId(e.target.value)} aria-label="Sekcja nadrzędna">
+              <option value="">Folder główny / Головна папка</option>
+              {(allSections || []).map(s => (
+                <option key={s.id} value={s.id}>{s.code} {s.name_pl}</option>
+              ))}
+            </select>
             <button type="submit" disabled={creating}>{creating ? '...' : '+ Dodaj / Додати'}</button>
           </form>
 
           <div className="sections-list">
-            {sections.map(s => (
+            {(allSections.length ? allSections : sections).map(s => (
               <div key={s.id} className="section-item">
                 <span className="section-code">{s.code}</span>
                 <span className="section-name"><SafeText>{s.name_pl}</SafeText> / <SafeText>{s.name_uk}</SafeText></span>
@@ -2490,6 +2524,9 @@ function AppContent() {
   const [showSectionManager, setShowSectionManager] = useState(false)
   const [docSearch, setDocSearch] = useState('')
   const [docStatusFilter, setDocStatusFilter] = useState('all')
+  const [docFileStats, setDocFileStats] = useState({})
+  const [newDocument, setNewDocument] = useState({ code: '', name_pl: '', name_uk: '' })
+  const [creatingDocument, setCreatingDocument] = useState(false)
   const [chatLanguageMode, setChatLanguageMode] = useState(() => {
     if (typeof window === 'undefined') return 'auto'
     const cached = window.localStorage.getItem('chat_display_language')
@@ -2546,7 +2583,42 @@ function AppContent() {
       .select('*, responsible:profiles!documents_responsible_user_id_fkey(full_name, email, side)')
       .in('section_id', sectionIds)
       .order('order_index')
-    safeSetState(setDocuments)(data || [])
+    const docs = data || []
+    safeSetState(setDocuments)(docs)
+
+    const ids = docs.map(d => d.id).filter(isValidUUID)
+    if (ids.length === 0) {
+      safeSetState(setDocFileStats)({})
+      return
+    }
+    let { data: fileRows, error: fileStatsError } = await supabase
+      .from('document_files')
+      .select('document_id, created_at, uploaded_at')
+      .in('document_id', ids)
+    if (fileStatsError && /uploaded_at/i.test(fileStatsError.message || '')) {
+      const fallback = await supabase
+        .from('document_files')
+        .select('document_id, created_at')
+        .in('document_id', ids)
+      fileRows = fallback.data
+      fileStatsError = fallback.error
+    }
+    if (fileStatsError) {
+      safeSetState(setDocFileStats)({})
+      return
+    }
+    const startOfDay = new Date()
+    startOfDay.setHours(0, 0, 0, 0)
+    const stats = {}
+    ids.forEach(id => { stats[id] = { total: 0, newToday: 0 } })
+    ;(fileRows || []).forEach(row => {
+      const docId = row.document_id
+      if (!stats[docId]) stats[docId] = { total: 0, newToday: 0 }
+      stats[docId].total += 1
+      const created = row.created_at || row.uploaded_at
+      if (created && new Date(created) >= startOfDay) stats[docId].newToday += 1
+    })
+    safeSetState(setDocFileStats)(stats)
   }, [activeSection, safeSetState])
 
   useEffect(() => { if (activeSection) loadDocuments() }, [activeSection, loadDocuments])
@@ -2562,6 +2634,33 @@ function AppContent() {
     await supabase.from('documents').update({ status, updated_at: new Date().toISOString() }).eq('id', docId)
     await logAudit(profile.id, 'update_status', 'document', docId, { status })
     loadDocuments()
+  }
+
+  const createDocument = async (e) => {
+    e.preventDefault()
+    if (!activeSection?.id) return
+    setCreatingDocument(true)
+    try {
+      const payload = {
+        section_id: activeSection.id,
+        code: sanitizeText(newDocument.code),
+        name_pl: sanitizeText(newDocument.name_pl),
+        name_uk: sanitizeText(newDocument.name_uk),
+        status: 'pending',
+        order_index: (documents?.length || 0) + 1,
+        created_by: profile.id
+      }
+      const { error } = await supabase.from('documents').insert(payload)
+      if (error) throw error
+      await logAudit(profile.id, 'create_document', 'document', null, { section_id: activeSection.id, code: payload.code })
+      setNewDocument({ code: '', name_pl: '', name_uk: '' })
+      addToast('Dokument utworzony / Документ створено', 'success')
+      loadDocuments()
+    } catch (err) {
+      addToast(`Błąd dokumentu: ${sanitizeText(err?.message || 'create_failed')}`, 'error')
+    } finally {
+      setCreatingDocument(false)
+    }
   }
 
   if (loading) return <div className="loading" role="status" aria-live="polite">Ładowanie... / Завантаження...</div>
@@ -2581,6 +2680,12 @@ function AppContent() {
   const totalDocs = filteredDocuments.length
   const completedDocs = filteredDocuments.filter(d => d.status === 'done').length
   const progress = totalDocs > 0 ? Math.round((completedDocs / totalDocs) * 100) : 0
+  const sectionFileStats = filteredDocuments.reduce((acc, doc) => {
+    const stat = docFileStats[doc.id] || { total: 0, newToday: 0 }
+    acc.total += stat.total
+    acc.newToday += stat.newToday
+    return acc
+  }, { total: 0, newToday: 0 })
 
   const startDiscussionFromDocument = (doc) => {
     if (!doc?.id || !selectedCompany?.id || !activeSection?.id) return
@@ -2686,6 +2791,11 @@ function AppContent() {
                   {STATUS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.pl} / {opt.uk}</option>)}
                 </select>
               </div>
+              <div className="context-chip">
+                <BiText pl="Pliki w sekcji" uk="Файли у секції" />
+                <strong>{sectionFileStats.total}</strong>
+                <small>Nowe dziś / Нові сьогодні: {sectionFileStats.newToday}</small>
+              </div>
               <div className="context-chip search">
                 <BiText pl="Szukaj dokumentu" uk="Пошук документа" />
                 <input
@@ -2697,6 +2807,33 @@ function AppContent() {
                 />
               </div>
             </div>
+
+            {isAdmin && (
+              <form className="doc-create-form" onSubmit={createDocument}>
+                <input
+                  value={newDocument.code}
+                  onChange={e => setNewDocument(prev => ({ ...prev, code: e.target.value }))}
+                  placeholder="Kod dokumentu / Код документа"
+                  required
+                  maxLength={24}
+                />
+                <input
+                  value={newDocument.name_pl}
+                  onChange={e => setNewDocument(prev => ({ ...prev, name_pl: e.target.value }))}
+                  placeholder="Nazwa dokumentu (PL)"
+                  required
+                />
+                <input
+                  value={newDocument.name_uk}
+                  onChange={e => setNewDocument(prev => ({ ...prev, name_uk: e.target.value }))}
+                  placeholder="Назва документа (UK)"
+                  required
+                />
+                <button type="submit" disabled={creatingDocument}>
+                  {creatingDocument ? '...' : '+ Dokument / + Документ'}
+                </button>
+              </form>
+            )}
 
             <div className="documents-list" role="list" aria-label="Lista dokumentów">
               {filteredDocuments.map(doc => (
@@ -2712,10 +2849,13 @@ function AppContent() {
                     <div className="doc-info">
                       <span className="doc-code">{doc.code}</span>
                       <div className="doc-names">
-                        <span className="name-pl"><SafeText>{doc.name_pl}</SafeText></span>
-                        <span className="name-uk"><SafeText>{doc.name_uk}</SafeText></span>
-                      </div>
+                      <span className="name-pl"><SafeText>{doc.name_pl}</SafeText></span>
+                      <span className="name-uk"><SafeText>{doc.name_uk}</SafeText></span>
+                      <span className="doc-file-stats">
+                        📎 {(docFileStats[doc.id]?.total || 0)} | 🆕 {(docFileStats[doc.id]?.newToday || 0)}
+                      </span>
                     </div>
+                  </div>
                     {doc.responsible && (
                       <span className="doc-responsible">
                         <SafeText>{doc.responsible.full_name || doc.responsible.email}</SafeText>

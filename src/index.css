@@ -375,7 +375,7 @@ body {
 
 .context-toolbar {
   display: grid;
-  grid-template-columns: 1fr 230px 1fr;
+  grid-template-columns: 1fr 220px 220px 1fr;
   gap: 0.7rem;
   margin-bottom: 1rem;
 }
@@ -392,6 +392,11 @@ body {
 
 .context-chip strong {
   font-size: 0.86rem;
+}
+
+.context-chip small {
+  font-size: 0.75rem;
+  color: var(--text-muted);
 }
 
 .context-chip select,
@@ -542,6 +547,12 @@ body {
   color: var(--text-muted);
 }
 
+.doc-file-stats {
+  margin-top: 0.2rem;
+  font-size: 0.74rem;
+  color: var(--text-light);
+}
+
 .doc-responsible {
   font-size: 0.85rem;
   color: var(--text-muted);
@@ -606,6 +617,34 @@ body {
   text-align: center;
   padding: 3rem;
   color: var(--text-muted);
+}
+
+.doc-create-form {
+  display: grid;
+  grid-template-columns: 170px 1fr 1fr auto;
+  gap: 0.5rem;
+  margin-bottom: 0.8rem;
+}
+
+.doc-create-form input {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.84rem;
+}
+
+.doc-create-form button {
+  border: none;
+  border-radius: 8px;
+  background: var(--primary);
+  color: #fff;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+}
+
+.doc-create-form button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* =====================================================
@@ -1930,6 +1969,9 @@ body {
   }
 
   .context-toolbar {
+    grid-template-columns: 1fr;
+  }
+  .doc-create-form {
     grid-template-columns: 1fr;
   }
 
