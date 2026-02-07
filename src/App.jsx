@@ -906,8 +906,11 @@ function Chat({
 }) {
   const [messages, setMessages] = useState([])
   const [attachmentsByMessage, setAttachmentsByMessage] = useState({})
+  const [threads, setThreads] = useState([])
+  const [threadMembers, setThreadMembers] = useState({})
   const [users, setUsers] = useState([])
-  const [selectedUser, setSelectedUser] = useState(null)
+  const [selectedThreadId, setSelectedThreadId] = useState(null)
+  const [selectedDirectUserId, setSelectedDirectUserId] = useState(null)
   const [selectedRecipients, setSelectedRecipients] = useState([])
   const [recipientMode, setRecipientMode] = useState('direct')
   const [newMessage, setNewMessage] = useState('')
@@ -931,6 +934,10 @@ function Chat({
   const addToast = useToast()
   const profile = useProfile()
   const safeSetState = useSafeAsync()
+  const currentThread = useMemo(
+    () => threads.find(t => t.id === selectedThreadId) || null,
+    [threads, selectedThreadId]
+  )
   const displayLanguage = useMemo(
     () => resolveLanguageMode(displayLanguageMode, profile?.side),
     [displayLanguageMode, profile?.side]
@@ -950,6 +957,7 @@ function Chat({
     if (contextSeed.sectionId) setTargetSectionId(contextSeed.sectionId)
     if (contextSeed.documentId) setTargetDocumentId(contextSeed.documentId)
     if (contextSeed.topic) setDiscussionTopic(contextSeed.topic)
+    setSelectedThreadId(null)
   }, [contextSeed])
 
   useEffect(() => {
@@ -993,14 +1001,10 @@ function Chat({
   }, [profile?.id, profile?.role, debouncedSearch, safeSetState])
 
   useEffect(() => {
-    if (!selectedUser && users.length > 0) setSelectedUser(users[0].id)
-  }, [users, selectedUser])
-
-  useEffect(() => {
-    if (recipientMode === 'direct' && selectedUser) {
-      setSelectedRecipients([selectedUser])
+    if (recipientMode === 'direct' && selectedDirectUserId) {
+      setSelectedRecipients([selectedDirectUserId])
     }
-  }, [recipientMode, selectedUser])
+  }, [recipientMode, selectedDirectUserId])
 
   useEffect(() => {
     const loadSections = async () => {
@@ -1046,6 +1050,66 @@ function Chat({
     loadDocumentsForTarget()
   }, [targetSectionId, targetDocumentId, safeSetState])
 
+  const loadThreads = useCallback(async () => {
+    if (!profile?.id) return
+    const { data, error } = await supabase
+      .from('chat_thread_members')
+      .select(`
+        thread_id,
+        thread:thread_id (
+          id,
+          company_id,
+          section_id,
+          document_id,
+          topic,
+          updated_at,
+          created_by,
+          is_archived
+        )
+      `)
+      .eq('user_id', profile.id)
+      .eq('is_active', true)
+      .order('joined_at', { ascending: false })
+
+    if (error) {
+      safeSetState(setThreads)([])
+      return
+    }
+
+    const normalized = (data || [])
+      .map(row => row.thread)
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0))
+
+    safeSetState(setThreads)(normalized)
+    if (!selectedThreadId && normalized.length > 0) setSelectedThreadId(normalized[0].id)
+  }, [profile?.id, safeSetState, selectedThreadId])
+
+  const loadThreadMembers = useCallback(async (threadList) => {
+    const ids = (threadList || []).map(t => t.id).filter(isValidUUID)
+    if (ids.length === 0) return safeSetState(setThreadMembers)({})
+    const { data, error } = await supabase
+      .from('chat_thread_members')
+      .select('thread_id, user_id, member_role, user:user_id(id, full_name, email, side)')
+      .in('thread_id', ids)
+      .eq('is_active', true)
+    if (error) return safeSetState(setThreadMembers)({})
+    const grouped = (data || []).reduce((acc, item) => {
+      if (!acc[item.thread_id]) acc[item.thread_id] = []
+      acc[item.thread_id].push(item)
+      return acc
+    }, {})
+    safeSetState(setThreadMembers)(grouped)
+  }, [safeSetState])
+
+  useEffect(() => {
+    loadThreads()
+  }, [loadThreads])
+
+  useEffect(() => {
+    loadThreadMembers(threads)
+  }, [threads, loadThreadMembers])
+
   const loadAttachments = useCallback(async (messageList) => {
     const ids = (messageList || []).map(m => m.id).filter(isValidUUID)
     if (ids.length === 0) return safeSetState(setAttachmentsByMessage)({})
@@ -1064,50 +1128,38 @@ function Chat({
   }, [safeSetState])
 
   const loadMessages = useCallback(async () => {
-    if (!selectedUser || !profile?.id) return
-    if (!isValidUUID(selectedUser) || !isValidUUID(profile.id)) return
-    const [sentResult, receivedResult] = await Promise.all([
-      supabase.from('chat_messages')
-        .select('*, sender:sender_id(full_name, email, side)')
-        .eq('sender_id', profile.id)
-        .eq('recipient_id', selectedUser)
-        .order('created_at', { ascending: true })
-        .limit(80),
-      supabase.from('chat_messages')
-        .select('*, sender:sender_id(full_name, email, side)')
-        .eq('sender_id', selectedUser)
-        .eq('recipient_id', profile.id)
-        .order('created_at', { ascending: true })
-        .limit(80)
-    ])
-
-    const allMessages = [...(sentResult.data || []), ...(receivedResult.data || [])]
-      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+    if (!selectedThreadId || !isValidUUID(selectedThreadId)) {
+      safeSetState(setMessages)([])
+      safeSetState(setAttachmentsByMessage)({})
+      return
+    }
+    const { data } = await supabase
+      .from('chat_messages')
+      .select('*, sender:sender_id(full_name, email, side)')
+      .eq('thread_id', selectedThreadId)
+      .order('created_at', { ascending: true })
+      .limit(120)
+    const allMessages = data || []
     safeSetState(setMessages)(allMessages)
     loadAttachments(allMessages)
-
-    if (receivedResult.data?.length) {
-      const unreadIds = receivedResult.data.filter(m => !m.is_read).map(m => m.id)
-      if (unreadIds.length > 0) await supabase.from('chat_messages').update({ is_read: true }).in('id', unreadIds)
-    }
-  }, [selectedUser, profile?.id, safeSetState, loadAttachments])
+  }, [selectedThreadId, safeSetState, loadAttachments])
 
   useEffect(() => {
     if (!profile?.id || !isValidUUID(profile.id)) return
     channelRef.current = supabase
       .channel(`chat_${profile.id}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages' }, (payload) => {
-        if (payload.new.recipient_id === profile.id && payload.new.sender_id === selectedUser) loadMessages()
+        if (payload.new.thread_id && payload.new.thread_id === selectedThreadId) loadMessages()
       })
       .subscribe()
     return () => {
       if (channelRef.current) supabase.removeChannel(channelRef.current)
     }
-  }, [profile?.id, selectedUser, loadMessages])
+  }, [profile?.id, selectedThreadId, loadMessages])
 
   useEffect(() => {
-    if (selectedUser) loadMessages()
-  }, [selectedUser, loadMessages])
+    if (selectedThreadId) loadMessages()
+  }, [selectedThreadId, loadMessages])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -1148,16 +1200,37 @@ function Chat({
     setPendingFiles(prev => prev.filter(f => f.name !== name))
   }
 
-  const toggleRecipient = (id) => {
-    if (recipientMode === 'direct') {
-      setSelectedUser(id)
-      setSelectedRecipients([id])
-      return
+  const findDirectThreadWithUser = useCallback((userId) => {
+    if (!userId || !profile?.id) return null
+    return threads.find((thread) => {
+      const members = threadMembers[thread.id] || []
+      if (members.length !== 2) return false
+      const ids = members.map(m => m.user_id)
+      return ids.includes(profile.id) && ids.includes(userId)
+    }) || null
+  }, [threads, threadMembers, profile?.id])
+
+  const selectDirectUser = (userId) => {
+    setRecipientMode('direct')
+    setSelectedDirectUserId(userId)
+    setSelectedRecipients([userId])
+    const existing = findDirectThreadWithUser(userId)
+    if (existing) {
+      setSelectedThreadId(existing.id)
+      setDiscussionTopic(existing.topic || '')
+      if (existing.company_id) setTargetCompanyId(existing.company_id)
+      if (existing.section_id) setTargetSectionId(existing.section_id)
+      if (existing.document_id) setTargetDocumentId(existing.document_id)
+    } else {
+      setSelectedThreadId(null)
     }
+  }
+
+  const toggleRecipient = (id) => {
     setSelectedRecipients(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   }
 
-  const uploadAttachmentsForMessage = async (messageId, recipientId) => {
+  const uploadAttachmentsForMessage = async (messageId, threadId, recipientId = null) => {
     if (pendingFiles.length === 0) return
     for (const file of pendingFiles) {
       const ext = getFileExtension(file.name)
@@ -1167,6 +1240,7 @@ function Chat({
       if (uploadError) throw uploadError
       const { error: dbError } = await supabase.from('chat_attachments').insert({
         message_id: messageId,
+        thread_id: threadId,
         sender_id: profile.id,
         recipient_id: recipientId,
         company_id: targetCompanyId,
@@ -1203,10 +1277,37 @@ function Chat({
     }
   }
 
+  const createThread = async (recipients) => {
+    const cleanRecipients = Array.from(new Set(recipients.filter(isValidUUID)))
+    const { data: thread, error: threadError } = await supabase
+      .from('chat_threads')
+      .insert({
+        company_id: targetCompanyId,
+        section_id: targetSectionId,
+        document_id: targetDocumentId,
+        topic: sanitizeText(discussionTopic.trim()),
+        created_by: profile.id
+      })
+      .select()
+      .single()
+    if (threadError || !thread?.id) throw threadError || new Error('Thread not created')
+
+    const members = [profile.id, ...cleanRecipients].map((userId) => ({
+      thread_id: thread.id,
+      user_id: userId,
+      member_role: userId === profile.id ? 'owner' : 'member',
+      is_active: true
+    }))
+    const { error: membersError } = await supabase.from('chat_thread_members').insert(members)
+    if (membersError) throw membersError
+    await loadThreads()
+    return thread
+  }
+
   const sendMessage = async (e) => {
     e.preventDefault()
-    const recipients = (recipientMode === 'group' ? selectedRecipients : [selectedUser]).filter(isValidUUID)
-    if ((!newMessage.trim() && pendingFiles.length === 0) || recipients.length === 0) return
+    const recipients = (recipientMode === 'group' ? selectedRecipients : [selectedDirectUserId]).filter(isValidUUID)
+    if ((!newMessage.trim() && pendingFiles.length === 0) || (recipients.length === 0 && !selectedThreadId)) return
     if (!targetCompanyId || !targetSectionId || !targetDocumentId) {
       addToast('Wybierz firmę, sekcję i dokument / Виберіть компанію, секцію і документ', 'warning')
       return
@@ -1242,22 +1343,31 @@ function Chat({
     })
 
     try {
-      for (const recipientId of recipients) {
-        const { data: createdMessage, error } = await supabase.from('chat_messages').insert({
-          sender_id: profile.id,
-          recipient_id: recipientId,
-          content: `${envelope}\n${messagePlain}`,
-          source_language: sourceLanguage,
-          translated_pl: `${envelope}\n${translatedPl}`,
-          translated_uk: `${envelope}\n${translatedUk}`,
-          translation_provider: 'smart-api',
-          has_attachments: pendingFiles.length > 0
-        }).select().single()
-        if (error || !createdMessage?.id) throw error || new Error('Message not created')
-        if (pendingFiles.length > 0) await uploadAttachmentsForMessage(createdMessage.id, recipientId)
+      let threadId = selectedThreadId
+      if (!threadId) {
+        const createdThread = await createThread(recipients)
+        threadId = createdThread.id
+        setSelectedThreadId(threadId)
       }
 
-      if (selectedUser) loadMessages()
+      const { data: createdMessage, error } = await supabase.from('chat_messages').insert({
+        sender_id: profile.id,
+        thread_id: threadId,
+        recipient_id: null,
+        content: `${envelope}\n${messagePlain}`,
+        source_language: sourceLanguage,
+        translated_pl: `${envelope}\n${translatedPl}`,
+        translated_uk: `${envelope}\n${translatedUk}`,
+        translation_provider: 'llm-translator',
+        has_attachments: pendingFiles.length > 0
+      }).select().single()
+      if (error || !createdMessage?.id) throw error || new Error('Message not created')
+      if (pendingFiles.length > 0) {
+        await uploadAttachmentsForMessage(createdMessage.id, threadId, recipientMode === 'direct' ? recipients[0] : null)
+      }
+
+      await loadThreads()
+      if (threadId) setSelectedThreadId(threadId)
       setNewMessage('')
       setLlmSuggestions([])
       setPendingFiles([])
@@ -1300,6 +1410,24 @@ function Chat({
 
       <div className="chat-body">
         <div className="chat-users">
+          <div className="threads-list">
+            {threads.map(thread => (
+              <button
+                key={thread.id}
+                className={`thread-item ${selectedThreadId === thread.id ? 'active' : ''}`}
+                onClick={() => {
+                  setSelectedThreadId(thread.id)
+                  setDiscussionTopic(thread.topic || '')
+                  if (thread.company_id) setTargetCompanyId(thread.company_id)
+                  if (thread.section_id) setTargetSectionId(thread.section_id)
+                  if (thread.document_id) setTargetDocumentId(thread.document_id)
+                }}
+              >
+                <strong><SafeText>{thread.topic || 'Thread'}</SafeText></strong>
+                <small>{(threadMembers[thread.id] || []).length} users</small>
+              </button>
+            ))}
+          </div>
           <input
             type="search"
             placeholder="Szukaj... / Пошук..."
@@ -1310,8 +1438,8 @@ function Chat({
           />
           <div className="users-list" role="listbox" aria-label="Lista kontaktów">
             {users.map(u => (
-              <div key={u.id} className={`chat-user ${selectedUser === u.id ? 'active' : ''}`}>
-                <button type="button" className="chat-user-main" onClick={() => setSelectedUser(u.id)} role="option" aria-selected={selectedUser === u.id}>
+              <div key={u.id} className={`chat-user ${selectedDirectUserId === u.id ? 'active' : ''}`}>
+                <button type="button" className="chat-user-main" onClick={() => selectDirectUser(u.id)} role="option" aria-selected={selectedDirectUserId === u.id}>
                   <span className="user-name"><SafeText>{u.full_name || u.email}</SafeText></span>
                   <span className={`side-badge ${u.side?.toLowerCase()}`}>{u.side}</span>
                 </button>
@@ -1334,7 +1462,7 @@ function Chat({
         </div>
 
         <div className="chat-messages">
-          {selectedUser ? (
+          {selectedThreadId || selectedRecipients.length > 0 ? (
             <>
               <div className="messages-list" role="log" aria-live="polite" aria-atomic="false" aria-label="Historia wiadomości">
                 {messages.map(m => {
@@ -1429,7 +1557,7 @@ function Chat({
               </div>
             </>
           ) : (
-            <div className="select-user"><BiText pl="Wybierz kontakt" uk="Виберіть контакт" /></div>
+            <div className="select-user"><BiText pl="Wybierz kontakt lub temat" uk="Виберіть контакт або тему" /></div>
           )}
         </div>
       </div>

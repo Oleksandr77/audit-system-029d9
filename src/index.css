@@ -971,6 +971,38 @@ body {
   flex-direction: column;
 }
 
+.threads-list {
+  max-height: 150px;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--border);
+  background: #f9fbfc;
+}
+
+.thread-item {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid #edf1f3;
+  background: transparent;
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-item strong {
+  display: block;
+  font-size: 0.75rem;
+}
+
+.thread-item small {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+.thread-item.active {
+  background: rgba(255, 122, 89, 0.14);
+  border-left: 3px solid var(--primary);
+}
+
 .user-search {
   padding: 0.5rem;
   border: none;
