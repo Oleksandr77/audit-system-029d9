@@ -311,12 +311,46 @@ async function llmSuggestCompletions(prefix, language, context = '') {
 function resolveDisplayedText(item, displayLanguage) {
   const source = item?.source_language || detectLanguage(item?.content || '')
   const content = item?.content || ''
+  const parsedContent = parseMessageContextEnvelope(content).text
   if (displayLanguage === 'pl') {
-    if (source === 'pl') return content
-    return item?.translated_pl || content
+    if (source === 'pl') return parsedContent
+    return parseMessageContextEnvelope(item?.translated_pl || content).text
   }
-  if (source === 'uk') return content
-  return item?.translated_uk || content
+  if (source === 'uk') return parsedContent
+  return parseMessageContextEnvelope(item?.translated_uk || content).text
+}
+
+function buildMessageContextEnvelope({ companyId, sectionId, documentId, topic }) {
+  return `[[CTX|c:${companyId || ''}|s:${sectionId || ''}|d:${documentId || ''}|t:${sanitizeText(topic || '')}]]`
+}
+
+function parseMessageContextEnvelope(value) {
+  const raw = String(value || '')
+  const match = raw.match(/^\[\[CTX\|c:(.*?)\|s:(.*?)\|d:(.*?)\|t:(.*?)\]\]\n?([\s\S]*)$/)
+  if (!match) {
+    return { text: raw, context: null }
+  }
+  return {
+    context: {
+      companyId: match[1] || '',
+      sectionId: match[2] || '',
+      documentId: match[3] || '',
+      topic: match[4] || ''
+    },
+    text: match[5] || ''
+  }
+}
+
+function getNextSectionCode(sections) {
+  const topLevelCodes = (sections || [])
+    .map(s => String(s.code || '').trim().toUpperCase())
+    .filter(code => /^[A-Z]$/.test(code))
+  if (topLevelCodes.length === 0) return 'A'
+  const maxChar = topLevelCodes
+    .map(code => code.charCodeAt(0))
+    .sort((a, b) => b - a)[0]
+  if (maxChar < 90) return String.fromCharCode(maxChar + 1)
+  return `A${topLevelCodes.length + 1}`
 }
 
 // =====================================================
@@ -713,9 +747,6 @@ const CommentItem = ({ comment, depth, maxDepth, onReply, onToggleVisibility, ca
         <time dateTime={comment.created_at}>{new Date(comment.created_at).toLocaleString()}</time>
       </div>
       <p className="comment-content"><SafeText>{renderedContent}</SafeText></p>
-      {comment.source_language && comment.source_language !== displayLanguage && (
-        <p className="comment-meta">Auto: {comment.source_language.toUpperCase()} → {displayLanguage.toUpperCase()}</p>
-      )}
       <div className="comment-actions">
         {canComment && depth < maxDepth - 1 && (
           <button onClick={() => onReply(comment.id)} aria-label="Odpowiedz / Відповісти">↩️ Odpowiedz</button>
@@ -866,17 +897,21 @@ function Chat({
   displayLanguageMode,
   onDisplayLanguageModeChange,
   contextHint,
+  contextSeed,
+  initialMessageDraft,
+  onDraftConsumed,
   companies = [],
   selectedCompanyId,
-  activeSectionId,
-  dockMode = 'panel',
-  onDockModeChange
+  activeSectionId
 }) {
   const [messages, setMessages] = useState([])
   const [attachmentsByMessage, setAttachmentsByMessage] = useState({})
   const [users, setUsers] = useState([])
   const [selectedUser, setSelectedUser] = useState(null)
+  const [selectedRecipients, setSelectedRecipients] = useState([])
+  const [recipientMode, setRecipientMode] = useState('direct')
   const [newMessage, setNewMessage] = useState('')
+  const [discussionTopic, setDiscussionTopic] = useState('')
   const [pendingFiles, setPendingFiles] = useState([])
   const [llmSuggestions, setLlmSuggestions] = useState([])
   const [loadingSuggestions, setLoadingSuggestions] = useState(false)
@@ -900,7 +935,6 @@ function Chat({
     () => resolveLanguageMode(displayLanguageMode, profile?.side),
     [displayLanguageMode, profile?.side]
   )
-  const isCollapsed = dockMode === 'collapsed'
 
   useEffect(() => {
     if (selectedCompanyId) setTargetCompanyId(selectedCompanyId)
@@ -910,11 +944,23 @@ function Chat({
     if (activeSectionId) setTargetSectionId(activeSectionId)
   }, [activeSectionId])
 
-  // Load users with search
+  useEffect(() => {
+    if (!contextSeed) return
+    if (contextSeed.companyId) setTargetCompanyId(contextSeed.companyId)
+    if (contextSeed.sectionId) setTargetSectionId(contextSeed.sectionId)
+    if (contextSeed.documentId) setTargetDocumentId(contextSeed.documentId)
+    if (contextSeed.topic) setDiscussionTopic(contextSeed.topic)
+  }, [contextSeed])
+
+  useEffect(() => {
+    if (!initialMessageDraft) return
+    setNewMessage(initialMessageDraft)
+    onDraftConsumed?.()
+  }, [initialMessageDraft, onDraftConsumed])
+
   useEffect(() => {
     const loadUsers = async () => {
       if (!profile?.id) return
-
       let query = supabase
         .from('profiles')
         .select('id, full_name, email, side, role')
@@ -931,33 +977,30 @@ function Chat({
           .from('chat_permissions')
           .select('can_message_user_id')
           .eq('user_id', profile.id)
-
         if (permissions && permissions.length > 0) {
           const allowedIds = permissions.map(p => p.can_message_user_id).filter(isValidUUID)
-          if (allowedIds.length > 0) {
-            query = query.in('id', allowedIds)
-          } else {
-            safeSetState(setUsers)([])
-            return
-          }
+          if (allowedIds.length > 0) query = query.in('id', allowedIds)
+          else return safeSetState(setUsers)([])
         } else {
-          safeSetState(setUsers)([])
-          return
+          return safeSetState(setUsers)([])
         }
       }
 
       const { data } = await query
       safeSetState(setUsers)(data || [])
     }
-
     loadUsers()
   }, [profile?.id, profile?.role, debouncedSearch, safeSetState])
 
   useEffect(() => {
-    if (!selectedUser && users.length > 0) {
-      setSelectedUser(users[0].id)
-    }
+    if (!selectedUser && users.length > 0) setSelectedUser(users[0].id)
   }, [users, selectedUser])
+
+  useEffect(() => {
+    if (recipientMode === 'direct' && selectedUser) {
+      setSelectedRecipients([selectedUser])
+    }
+  }, [recipientMode, selectedUser])
 
   useEffect(() => {
     const loadSections = async () => {
@@ -995,7 +1038,6 @@ function Chat({
         .select('id, code, name_pl, name_uk')
         .in('section_id', sectionIds)
         .order('order_index')
-
       safeSetState(setTargetDocuments)(data || [])
       if ((!targetDocumentId || !data?.some(d => d.id === targetDocumentId)) && data?.length > 0) {
         setTargetDocumentId(data[0].id)
@@ -1006,94 +1048,60 @@ function Chat({
 
   const loadAttachments = useCallback(async (messageList) => {
     const ids = (messageList || []).map(m => m.id).filter(isValidUUID)
-    if (ids.length === 0) {
-      safeSetState(setAttachmentsByMessage)({})
-      return
-    }
-
+    if (ids.length === 0) return safeSetState(setAttachmentsByMessage)({})
     const { data, error } = await supabase
       .from('chat_attachments')
       .select('*')
       .in('message_id', ids)
       .order('created_at', { ascending: true })
-    if (error) {
-      safeSetState(setAttachmentsByMessage)({})
-      return
-    }
-
+    if (error) return safeSetState(setAttachmentsByMessage)({})
     const grouped = (data || []).reduce((acc, item) => {
       if (!acc[item.message_id]) acc[item.message_id] = []
       acc[item.message_id].push(item)
       return acc
     }, {})
-
     safeSetState(setAttachmentsByMessage)(grouped)
   }, [safeSetState])
 
-  // SECURE: Load messages WITHOUT SQL interpolation
   const loadMessages = useCallback(async () => {
     if (!selectedUser || !profile?.id) return
     if (!isValidUUID(selectedUser) || !isValidUUID(profile.id)) return
-
-    // Two separate queries instead of .or() with interpolation
     const [sentResult, receivedResult] = await Promise.all([
-      supabase
-        .from('chat_messages')
+      supabase.from('chat_messages')
         .select('*, sender:sender_id(full_name, email, side)')
         .eq('sender_id', profile.id)
         .eq('recipient_id', selectedUser)
         .order('created_at', { ascending: true })
-        .limit(50),
-      supabase
-        .from('chat_messages')
+        .limit(80),
+      supabase.from('chat_messages')
         .select('*, sender:sender_id(full_name, email, side)')
         .eq('sender_id', selectedUser)
         .eq('recipient_id', profile.id)
         .order('created_at', { ascending: true })
-        .limit(50)
+        .limit(80)
     ])
 
-    // Merge and sort
-    const allMessages = [
-      ...(sentResult.data || []),
-      ...(receivedResult.data || [])
-    ].sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
-
+    const allMessages = [...(sentResult.data || []), ...(receivedResult.data || [])]
+      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
     safeSetState(setMessages)(allMessages)
     loadAttachments(allMessages)
 
-    // Mark as read
-    if (receivedResult.data && receivedResult.data.length > 0) {
+    if (receivedResult.data?.length) {
       const unreadIds = receivedResult.data.filter(m => !m.is_read).map(m => m.id)
-      if (unreadIds.length > 0) {
-        await supabase
-          .from('chat_messages')
-          .update({ is_read: true })
-          .in('id', unreadIds)
-      }
+      if (unreadIds.length > 0) await supabase.from('chat_messages').update({ is_read: true }).in('id', unreadIds)
     }
   }, [selectedUser, profile?.id, safeSetState, loadAttachments])
 
-  // Realtime subscription
   useEffect(() => {
     if (!profile?.id || !isValidUUID(profile.id)) return
-
     channelRef.current = supabase
       .channel(`chat_${profile.id}`)
-      .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'chat_messages' },
-        (payload) => {
-          if (payload.new.recipient_id === profile.id && payload.new.sender_id === selectedUser) {
-            loadMessages()
-          }
-        }
-      )
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages' }, (payload) => {
+        if (payload.new.recipient_id === profile.id && payload.new.sender_id === selectedUser) loadMessages()
+      })
       .subscribe()
-
     return () => {
-      if (channelRef.current) {
-        supabase.removeChannel(channelRef.current)
-      }
+      if (channelRef.current) supabase.removeChannel(channelRef.current)
     }
   }, [profile?.id, selectedUser, loadMessages])
 
@@ -1107,26 +1115,19 @@ function Chat({
 
   useEffect(() => {
     const loadSuggestions = async () => {
-      if (!debouncedMessage.trim() || !selectedUser) {
-        safeSetState(setLlmSuggestions)([])
-        return
-      }
+      if (!debouncedMessage.trim()) return safeSetState(setLlmSuggestions)([])
       const recentMessagesContext = messages
         .slice(-6)
         .map((m) => `${m.sender?.full_name || m.sender?.email || 'User'}: ${resolveDisplayedText(m, displayLanguage)}`)
         .join('\n')
-      const fullContext = [contextHint || '', recentMessagesContext].filter(Boolean).join('\n')
+      const fullContext = [contextHint || '', discussionTopic, recentMessagesContext].filter(Boolean).join('\n')
       safeSetState(setLoadingSuggestions)(true)
-      const suggestions = await llmSuggestCompletions(
-        debouncedMessage,
-        detectLanguage(debouncedMessage),
-        fullContext
-      )
+      const suggestions = await llmSuggestCompletions(debouncedMessage, detectLanguage(debouncedMessage), fullContext)
       safeSetState(setLlmSuggestions)(suggestions)
       safeSetState(setLoadingSuggestions)(false)
     }
     loadSuggestions()
-  }, [debouncedMessage, selectedUser, safeSetState, messages, displayLanguage, contextHint])
+  }, [debouncedMessage, safeSetState, messages, displayLanguage, contextHint, discussionTopic])
 
   const onPickFiles = (e) => {
     const picked = Array.from(e.target.files || [])
@@ -1147,24 +1148,27 @@ function Chat({
     setPendingFiles(prev => prev.filter(f => f.name !== name))
   }
 
-  const uploadAttachmentsForMessage = async (messageId) => {
-    if (pendingFiles.length === 0) return
-    if (!targetCompanyId || !targetSectionId || !targetDocumentId) {
-      throw new Error('Wybierz firmę, sekcję i dokument / Виберіть компанію, секцію та документ')
+  const toggleRecipient = (id) => {
+    if (recipientMode === 'direct') {
+      setSelectedUser(id)
+      setSelectedRecipients([id])
+      return
     }
+    setSelectedRecipients(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
 
+  const uploadAttachmentsForMessage = async (messageId, recipientId) => {
+    if (pendingFiles.length === 0) return
     for (const file of pendingFiles) {
       const ext = getFileExtension(file.name)
       const safeFileName = sanitizeFileName(file.name)
       const filePath = `chat/${targetCompanyId}/${targetSectionId}/${targetDocumentId}/${messageId}/${safeFileName}`
-
       const { error: uploadError } = await supabase.storage.from('documents').upload(filePath, file)
       if (uploadError) throw uploadError
-
       const { error: dbError } = await supabase.from('chat_attachments').insert({
         message_id: messageId,
         sender_id: profile.id,
-        recipient_id: selectedUser,
+        recipient_id: recipientId,
         company_id: targetCompanyId,
         section_id: targetSectionId,
         document_id: targetDocumentId,
@@ -1178,10 +1182,7 @@ function Chat({
         await supabase.storage.from('documents').remove([filePath])
         throw dbError
       }
-
-      await logAudit(profile.id, 'upload_file', 'chat_attachment', messageId, { file_name: file.name })
     }
-
     await supabase.from('chat_messages').update({ has_attachments: true }).eq('id', messageId)
   }
 
@@ -1204,9 +1205,17 @@ function Chat({
 
   const sendMessage = async (e) => {
     e.preventDefault()
-    if ((!newMessage.trim() && pendingFiles.length === 0) || !selectedUser) return
+    const recipients = (recipientMode === 'group' ? selectedRecipients : [selectedUser]).filter(isValidUUID)
+    if ((!newMessage.trim() && pendingFiles.length === 0) || recipients.length === 0) return
+    if (!targetCompanyId || !targetSectionId || !targetDocumentId) {
+      addToast('Wybierz firmę, sekcję i dokument / Виберіть компанію, секцію і документ', 'warning')
+      return
+    }
+    if (!discussionTopic.trim()) {
+      addToast('Wpisz temat dyskusji / Вкажіть тему обговорення', 'warning')
+      return
+    }
 
-    // Rate limiting
     const now = Date.now()
     if (now - lastMessageTime.current < RATE_LIMIT_MS) {
       addToast('Zbyt szybko / Занадто швидко', 'warning')
@@ -1214,43 +1223,44 @@ function Chat({
     }
     lastMessageTime.current = now
 
-    if (!isValidUUID(selectedUser)) {
-      addToast('Nieprawidłowy odbiorca / Невірний отримувач', 'error')
-      return
-    }
-
-    const messageContent = sanitizeText(newMessage.trim() || (pendingFiles.length > 0 ? '📎 Attachment' : ''))
-    if (messageContent.length > MAX_MESSAGE_LENGTH) {
+    const messagePlain = sanitizeText(newMessage.trim() || (pendingFiles.length > 0 ? '📎 Attachment' : ''))
+    if (messagePlain.length > MAX_MESSAGE_LENGTH) {
       addToast(`Maksymalnie ${MAX_MESSAGE_LENGTH} znaków`, 'error')
       return
     }
 
     setSending(true)
-    const sourceLanguage = detectLanguage(messageContent)
-    const [translatedPl, translatedUk] = await Promise.all([
-      sourceLanguage === 'pl' ? Promise.resolve(messageContent) : llmTranslateStrict(messageContent, sourceLanguage, 'pl'),
-      sourceLanguage === 'uk' ? Promise.resolve(messageContent) : llmTranslateStrict(messageContent, sourceLanguage, 'uk')
-    ])
+    const sourceLanguage = detectLanguage(messagePlain)
+    const translatedPl = sourceLanguage === 'pl' ? messagePlain : await llmTranslateStrict(messagePlain, sourceLanguage, 'pl')
+    const translatedUk = sourceLanguage === 'uk' ? messagePlain : await llmTranslateStrict(messagePlain, sourceLanguage, 'uk')
+
+    const envelope = buildMessageContextEnvelope({
+      companyId: targetCompanyId,
+      sectionId: targetSectionId,
+      documentId: targetDocumentId,
+      topic: discussionTopic
+    })
 
     try {
-      const { data: createdMessage, error } = await supabase.from('chat_messages').insert({
-        sender_id: profile.id,
-        recipient_id: selectedUser,
-        content: messageContent,
-        source_language: sourceLanguage,
-        translated_pl: translatedPl,
-        translated_uk: translatedUk,
-        translation_provider: 'smart-api',
-        has_attachments: pendingFiles.length > 0
-      }).select().single()
+      for (const recipientId of recipients) {
+        const { data: createdMessage, error } = await supabase.from('chat_messages').insert({
+          sender_id: profile.id,
+          recipient_id: recipientId,
+          content: `${envelope}\n${messagePlain}`,
+          source_language: sourceLanguage,
+          translated_pl: `${envelope}\n${translatedPl}`,
+          translated_uk: `${envelope}\n${translatedUk}`,
+          translation_provider: 'smart-api',
+          has_attachments: pendingFiles.length > 0
+        }).select().single()
+        if (error || !createdMessage?.id) throw error || new Error('Message not created')
+        if (pendingFiles.length > 0) await uploadAttachmentsForMessage(createdMessage.id, recipientId)
+      }
 
-      if (error || !createdMessage?.id) throw error || new Error('Message not created')
-
-      if (pendingFiles.length > 0) await uploadAttachmentsForMessage(createdMessage.id)
+      if (selectedUser) loadMessages()
       setNewMessage('')
       setLlmSuggestions([])
       setPendingFiles([])
-      loadMessages()
     } catch (err) {
       addToast('Błąd wysyłania / Помилка надсилання', 'error')
       console.error('Send message error:', err)
@@ -1259,23 +1269,17 @@ function Chat({
   }
 
   return (
-    <div className={`chat-panel dock-${dockMode}`} role="region" aria-label="Czat / Чат">
+    <div className="chat-panel" role="region" aria-label="Czat / Чат">
       <div className="chat-header">
         <div className="chat-title-stack">
-          <BiText pl="Czat (aktywny)" uk="Чат (активний)" />
-          <small>Auto PL ↔ UK</small>
-          {contextHint && <small className="chat-context">Kontekst / Контекст: <SafeText>{contextHint}</SafeText></small>}
+          <BiText pl="Czat roboczy" uk="Робочий чат" />
+          {contextHint && <small className="chat-context"><SafeText>{contextHint}</SafeText></small>}
         </div>
         <div className="chat-language-controls">
-          <label htmlFor="chat-dock-mode"><BiText pl="Widok" uk="Вигляд" /></label>
-          <select
-            id="chat-dock-mode"
-            value={dockMode}
-            onChange={e => onDockModeChange?.(e.target.value)}
-          >
-            <option value="collapsed">Compact / Компакт</option>
-            <option value="panel">Panel / Панель</option>
-            <option value="focus">Focus / Фокус</option>
+          <label htmlFor="chat-recipient-mode"><BiText pl="Adresaci" uk="Одержувачі" /></label>
+          <select id="chat-recipient-mode" value={recipientMode} onChange={e => setRecipientMode(e.target.value)}>
+            <option value="direct">Direct</option>
+            <option value="group">Group</option>
           </select>
           <label htmlFor="chat-language-mode">Język / Мова</label>
           <select
@@ -1294,7 +1298,7 @@ function Chat({
         </div>
       </div>
 
-      {!isCollapsed && <div className="chat-body">
+      <div className="chat-body">
         <div className="chat-users">
           <input
             type="search"
@@ -1306,21 +1310,24 @@ function Chat({
           />
           <div className="users-list" role="listbox" aria-label="Lista kontaktów">
             {users.map(u => (
-              <button
-                key={u.id}
-                className={`chat-user ${selectedUser === u.id ? 'active' : ''}`}
-                onClick={() => setSelectedUser(u.id)}
-                role="option"
-                aria-selected={selectedUser === u.id}
-              >
-                <span className="user-name"><SafeText>{u.full_name || u.email}</SafeText></span>
-                <span className={`side-badge ${u.side?.toLowerCase()}`}>{u.side}</span>
-              </button>
+              <div key={u.id} className={`chat-user ${selectedUser === u.id ? 'active' : ''}`}>
+                <button type="button" className="chat-user-main" onClick={() => setSelectedUser(u.id)} role="option" aria-selected={selectedUser === u.id}>
+                  <span className="user-name"><SafeText>{u.full_name || u.email}</SafeText></span>
+                  <span className={`side-badge ${u.side?.toLowerCase()}`}>{u.side}</span>
+                </button>
+                <label className="chat-user-select">
+                  <input
+                    type="checkbox"
+                    checked={selectedRecipients.includes(u.id)}
+                    onChange={() => toggleRecipient(u.id)}
+                  />
+                  <span>{recipientMode === 'group' ? 'Do grupy' : 'Adresat'}</span>
+                </label>
+              </div>
             ))}
             {users.length === 0 && (
               <div className="no-contacts">
                 <BiText pl="Brak kontaktów" uk="Немає контактів" />
-                <small>Dodaj drugiego użytkownika, aby rozpocząć chat / Додайте ще одного користувача для чату</small>
               </div>
             )}
           </div>
@@ -1329,42 +1336,39 @@ function Chat({
         <div className="chat-messages">
           {selectedUser ? (
             <>
-              <div
-                className="messages-list"
-                role="log"
-                aria-live="polite"
-                aria-atomic="false"
-                aria-label="Historia wiadomości"
-              >
-                {messages.map(m => (
-                  <div key={m.id} className={`message ${m.sender_id === profile?.id ? 'sent' : 'received'}`}>
-                    <div className="message-header">
-                      <span className="message-sender"><SafeText>{m.sender?.full_name || m.sender?.email}</SafeText></span>
-                      <span className={`side-badge ${m.sender?.side?.toLowerCase()}`}>{m.sender?.side}</span>
-                    </div>
-                    <p className="message-content"><SafeText>{resolveDisplayedText(m, displayLanguage)}</SafeText></p>
-                    {m.source_language && m.source_language !== displayLanguage && (
-                      <span className="message-translation-meta">Auto: {m.source_language.toUpperCase()} → {displayLanguage.toUpperCase()}</span>
-                    )}
-                    {(attachmentsByMessage[m.id] || []).length > 0 && (
-                      <div className="message-attachments">
-                        {(attachmentsByMessage[m.id] || []).map(att => (
-                          <div key={att.id} className="message-attachment-card">
-                            <span className="attachment-name"><SafeText>{att.file_name}</SafeText></span>
-                            <span className="attachment-meta">{(att.file_size / 1024 / 1024).toFixed(2)} MB</span>
-                            <div className="attachment-actions">
-                              <button type="button" onClick={() => openAttachment(att)}>👁️</button>
-                              <button type="button" onClick={() => downloadAttachment(att)}>⬇️</button>
-                            </div>
-                          </div>
-                        ))}
+              <div className="messages-list" role="log" aria-live="polite" aria-atomic="false" aria-label="Historia wiadomości">
+                {messages.map(m => {
+                  const parsed = parseMessageContextEnvelope(resolveDisplayedText(m, displayLanguage))
+                  const rawCtx = parseMessageContextEnvelope(m.content).context
+                  return (
+                    <div key={m.id} className={`message ${m.sender_id === profile?.id ? 'sent' : 'received'}`}>
+                      <div className="message-header">
+                        <span className="message-sender"><SafeText>{m.sender?.full_name || m.sender?.email}</SafeText></span>
+                        <span className={`side-badge ${m.sender?.side?.toLowerCase()}`}>{m.sender?.side}</span>
                       </div>
-                    )}
-                    <time className="message-time" dateTime={m.created_at}>{new Date(m.created_at).toLocaleString()}</time>
-                  </div>
-                ))}
+                      {rawCtx?.topic && <span className="message-context-chip"><SafeText>{rawCtx.topic}</SafeText></span>}
+                      <p className="message-content"><SafeText>{parsed.text}</SafeText></p>
+                      {(attachmentsByMessage[m.id] || []).length > 0 && (
+                        <div className="message-attachments">
+                          {(attachmentsByMessage[m.id] || []).map(att => (
+                            <div key={att.id} className="message-attachment-card">
+                              <span className="attachment-name"><SafeText>{att.file_name}</SafeText></span>
+                              <span className="attachment-meta">{(att.file_size / 1024 / 1024).toFixed(2)} MB</span>
+                              <div className="attachment-actions">
+                                <button type="button" onClick={() => openAttachment(att)}>👁️</button>
+                                <button type="button" onClick={() => downloadAttachment(att)}>⬇️</button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <time className="message-time" dateTime={m.created_at}>{new Date(m.created_at).toLocaleString()}</time>
+                    </div>
+                  )
+                })}
                 <div ref={messagesEndRef} />
               </div>
+
               <div className="attachment-target">
                 <select value={targetCompanyId} onChange={e => setTargetCompanyId(e.target.value)} aria-label="Firma">
                   <option value="">Firma / Компанія</option>
@@ -1378,11 +1382,20 @@ function Chat({
                   <option value="">Dokument / Документ</option>
                   {targetDocuments.map(d => <option key={d.id} value={d.id}>{d.code} {d.name_pl}</option>)}
                 </select>
+                <input
+                  type="text"
+                  value={discussionTopic}
+                  onChange={e => setDiscussionTopic(e.target.value)}
+                  placeholder="Temat dyskusji / Тема обговорення"
+                  maxLength={120}
+                  aria-label="Temat dyskusji"
+                />
                 <label className="chat-attach-btn">
                   📎
                   <input ref={fileInputRef} type="file" multiple onChange={onPickFiles} style={{ display: 'none' }} />
                 </label>
               </div>
+
               {pendingFiles.length > 0 && (
                 <div className="pending-files">
                   {pendingFiles.map(file => (
@@ -1392,18 +1405,20 @@ function Chat({
                   ))}
                 </div>
               )}
+
               <form onSubmit={sendMessage} className="message-form">
-                <input
+                <textarea
                   value={newMessage}
                   onChange={e => setNewMessage(e.target.value)}
                   placeholder="Napisz wiadomość... / Напишіть повідомлення..."
                   maxLength={MAX_MESSAGE_LENGTH}
                   aria-label="Treść wiadomości"
+                  rows={3}
                 />
                 <button type="submit" disabled={sending || (!newMessage.trim() && pendingFiles.length === 0)} aria-label="Wyślij wiadomość">📤</button>
               </form>
+
               <div className="llm-suggestions" aria-live="polite">
-                <span className="llm-label">T9</span>
                 {loadingSuggestions ? (
                   <span className="llm-hint">...</span>
                 ) : (
@@ -1417,7 +1432,7 @@ function Chat({
             <div className="select-user"><BiText pl="Wybierz kontakt" uk="Виберіть контакт" /></div>
           )}
         </div>
-      </div>}
+      </div>
     </div>
   )
 }
@@ -1774,7 +1789,7 @@ function DocumentDetail({ document, onClose, onUpdate, displayLanguage }) {
 // SECTION MANAGER
 // =====================================================
 function SectionManager({ company, sections, onUpdate, onClose }) {
-  const [newSection, setNewSection] = useState({ code: '', name_pl: '', name_uk: '' })
+  const [newSection, setNewSection] = useState({ code: getNextSectionCode(sections), name_pl: '', name_uk: '' })
   const [creating, setCreating] = useState(false)
   const modalRef = useRef(null)
   const addToast = useToast()
@@ -1782,12 +1797,16 @@ function SectionManager({ company, sections, onUpdate, onClose }) {
 
   useFocusTrap(modalRef, true)
 
+  useEffect(() => {
+    setNewSection(prev => ({ ...prev, code: getNextSectionCode(sections) }))
+  }, [sections])
+
   const createSection = async (e) => {
     e.preventDefault()
     setCreating(true)
     const { error } = await supabase.from('document_sections').insert({
       company_id: company.id,
-      code: sanitizeText(newSection.code),
+      code: sanitizeText(newSection.code || getNextSectionCode(sections)),
       name_pl: sanitizeText(newSection.name_pl),
       name_uk: sanitizeText(newSection.name_uk),
       order_index: sections.length + 1,
@@ -1795,7 +1814,7 @@ function SectionManager({ company, sections, onUpdate, onClose }) {
     })
 
     if (!error) {
-      setNewSection({ code: '', name_pl: '', name_uk: '' })
+      setNewSection({ code: getNextSectionCode(sections), name_pl: '', name_uk: '' })
       onUpdate()
       addToast('Sekcja utworzona / Розділ створено', 'success')
     }
@@ -1818,7 +1837,7 @@ function SectionManager({ company, sections, onUpdate, onClose }) {
         </div>
         <div className="modal-body">
           <form onSubmit={createSection} className="section-form">
-            <input placeholder="Kod (np. A)" value={newSection.code} onChange={e => setNewSection({...newSection, code: e.target.value})} required maxLength={10} aria-label="Kod sekcji" />
+            <input placeholder="Kod auto" value={newSection.code} readOnly maxLength={10} aria-label="Kod sekcji (auto)" />
             <input placeholder="Nazwa (PL)" value={newSection.name_pl} onChange={e => setNewSection({...newSection, name_pl: e.target.value})} required aria-label="Nazwa polska" />
             <input placeholder="Назва (UK)" value={newSection.name_uk} onChange={e => setNewSection({...newSection, name_uk: e.target.value})} required aria-label="Nazwa ukraińska" />
             <button type="submit" disabled={creating}>{creating ? '...' : '+ Dodaj / Додати'}</button>
@@ -1977,15 +1996,13 @@ function AppContent() {
   const [showSectionManager, setShowSectionManager] = useState(false)
   const [docSearch, setDocSearch] = useState('')
   const [docStatusFilter, setDocStatusFilter] = useState('all')
-  const [chatDockMode, setChatDockMode] = useState(() => {
-    if (typeof window === 'undefined') return 'panel'
-    return window.localStorage.getItem('chat_dock_mode') || 'panel'
-  })
   const [chatLanguageMode, setChatLanguageMode] = useState(() => {
     if (typeof window === 'undefined') return 'auto'
     const cached = window.localStorage.getItem('chat_display_language')
     return LANGUAGE_MODES.includes(cached) ? cached : 'auto'
   })
+  const [chatContextSeed, setChatContextSeed] = useState(null)
+  const [chatInitialDraft, setChatInitialDraft] = useState('')
   const addToast = useToast()
   const safeSetState = useSafeAsync()
 
@@ -2046,13 +2063,6 @@ function AppContent() {
     window.localStorage.setItem('chat_display_language', chatLanguageMode)
   }, [chatLanguageMode])
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const allowed = ['collapsed', 'panel', 'focus']
-    if (!allowed.includes(chatDockMode)) return
-    window.localStorage.setItem('chat_dock_mode', chatDockMode)
-  }, [chatDockMode])
-
   const updateStatus = async (docId, status) => {
     if (!isValidUUID(docId)) return
     await supabase.from('documents').update({ status, updated_at: new Date().toISOString() }).eq('id', docId)
@@ -2078,6 +2088,18 @@ function AppContent() {
   const completedDocs = filteredDocuments.filter(d => d.status === 'done').length
   const progress = totalDocs > 0 ? Math.round((completedDocs / totalDocs) * 100) : 0
 
+  const startDiscussionFromDocument = (doc) => {
+    if (!doc?.id || !selectedCompany?.id || !activeSection?.id) return
+    const topic = `${doc.code} ${doc.name_pl}`
+    setChatContextSeed({
+      companyId: selectedCompany.id,
+      sectionId: activeSection.id,
+      documentId: doc.id,
+      topic
+    })
+    setChatInitialDraft(`Pytanie dot. ${doc.code} / Питання щодо ${doc.code}: `)
+  }
+
   return (
     <ProfileContext.Provider value={profile}>
       <div className="app">
@@ -2085,7 +2107,10 @@ function AppContent() {
 
         <header role="banner">
           <div className="header-left">
-            <h1>Audit System</h1>
+            <div className="brand-stack">
+              <h1>Foundation Unbreakable Ukraine</h1>
+              <small>Audit System</small>
+            </div>
             <select value={selectedCompany?.id || ''} onChange={e => setSelectedCompany(companies.find(c => c.id === e.target.value))} aria-label="Wybierz firmę">
               {companies.map(c => <option key={c.id} value={c.id}>{c.name_pl} / {c.name_uk}</option>)}
             </select>
@@ -2199,6 +2224,17 @@ function AppContent() {
                       <span className={`side-badge small ${doc.responsible.side?.toLowerCase()}`}>{doc.responsible.side}</span>
                     </span>
                   )}
+                  <button
+                    type="button"
+                    className="doc-chat-btn"
+                    onClick={e => {
+                      e.stopPropagation()
+                      startDiscussionFromDocument(doc)
+                    }}
+                    aria-label={`Omów dokument ${doc.code}`}
+                  >
+                    💬 Omów / Обговорити
+                  </button>
                   <select
                     value={doc.status || 'pending'}
                     onChange={e => { e.stopPropagation(); updateStatus(doc.id, e.target.value) }}
@@ -2220,8 +2256,6 @@ function AppContent() {
               <Chat
                 displayLanguageMode={chatLanguageMode}
                 onDisplayLanguageModeChange={setChatLanguageMode}
-                dockMode={chatDockMode}
-                onDockModeChange={setChatDockMode}
                 contextHint={
                   selectedDocument
                     ? `${selectedDocument.code} ${selectedDocument.name_pl}`
@@ -2229,6 +2263,9 @@ function AppContent() {
                       ? `${activeSection.code} ${activeSection.name_pl}`
                       : ''
                 }
+                contextSeed={chatContextSeed}
+                initialMessageDraft={chatInitialDraft}
+                onDraftConsumed={() => setChatInitialDraft('')}
                 companies={companies}
                 selectedCompanyId={selectedCompany?.id}
                 activeSectionId={activeSection?.id}
