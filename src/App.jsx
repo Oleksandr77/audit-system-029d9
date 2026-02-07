@@ -492,6 +492,11 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
   const [files, setFiles] = useState([])
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [versionTableReady, setVersionTableReady] = useState(true)
+  const [expandedVersionFileId, setExpandedVersionFileId] = useState(null)
+  const [versionsByFile, setVersionsByFile] = useState({})
+  const [loadingVersionsByFile, setLoadingVersionsByFile] = useState({})
+  const [rollingBackVersionId, setRollingBackVersionId] = useState(null)
   const [previewFile, setPreviewFile] = useState(null)
   const [previewUrl, setPreviewUrl] = useState('')
   const [previewText, setPreviewText] = useState('')
@@ -563,6 +568,82 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
   }, [document?.id, profile?.side, safeSetState, addToast])
 
   useEffect(() => { loadFiles() }, [loadFiles])
+
+  const loadVersionsForFile = useCallback(async (fileId) => {
+    if (!fileId || !versionTableReady) return
+    safeSetState(setLoadingVersionsByFile)(prev => ({ ...prev, [fileId]: true }))
+    const { data, error } = await supabase
+      .from('document_file_versions')
+      .select('*')
+      .eq('file_id', fileId)
+      .order('version_no', { ascending: false })
+
+    if (error) {
+      if (/document_file_versions|relation .* does not exist|column .* does not exist/i.test(error.message || '')) {
+        setVersionTableReady(false)
+        addToast('Wersje plików nieaktywne: uruchom SQL migrację / Версії файлів неактивні: запустіть SQL міграцію', 'warning')
+      } else {
+        addToast(`Błąd wersji: ${sanitizeText(error.message || 'version_query_failed')}`, 'error')
+      }
+      safeSetState(setVersionsByFile)(prev => ({ ...prev, [fileId]: [] }))
+    } else {
+      safeSetState(setVersionsByFile)(prev => ({ ...prev, [fileId]: data || [] }))
+    }
+    safeSetState(setLoadingVersionsByFile)(prev => ({ ...prev, [fileId]: false }))
+  }, [safeSetState, addToast, versionTableReady])
+
+  const makeVersionPath = (file) => {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-')
+    const safeName = sanitizeFileName(file.file_name || `file-${file.id}`)
+    return `versions/${document.id}/${file.id}/${ts}-${safeName}`
+  }
+
+  const snapshotCurrentVersion = useCallback(async (file, reason = 'manual') => {
+    if (!versionTableReady) return
+    const { data: currentBlob, error: downloadError } = await supabase.storage.from('documents').download(file.file_path)
+    if (downloadError) throw downloadError
+    const versionPath = makeVersionPath(file)
+
+    const { error: uploadVersionError } = await supabase.storage
+      .from('documents')
+      .upload(versionPath, currentBlob, { upsert: false })
+    if (uploadVersionError) throw uploadVersionError
+
+    const { data: lastVersionData, error: lastVersionError } = await supabase
+      .from('document_file_versions')
+      .select('version_no')
+      .eq('file_id', file.id)
+      .order('version_no', { ascending: false })
+      .limit(1)
+
+    if (lastVersionError && !/document_file_versions|relation .* does not exist/i.test(lastVersionError.message || '')) {
+      throw lastVersionError
+    }
+    const nextVersion = ((lastVersionData && lastVersionData[0]?.version_no) || 0) + 1
+
+    const { error: insertVersionError } = await supabase.from('document_file_versions').insert({
+      file_id: file.id,
+      document_id: document.id,
+      version_no: nextVersion,
+      storage_path: versionPath,
+      file_name: file.file_name,
+      file_size: file.file_size || 0,
+      mime_type: file.mime_type || null,
+      file_type: file.file_type || null,
+      change_reason: reason,
+      created_by: profile.id
+    })
+
+    if (insertVersionError) {
+      if (/document_file_versions|relation .* does not exist|column .* does not exist/i.test(insertVersionError.message || '')) {
+        setVersionTableReady(false)
+        addToast('Wersje plików nieaktywne: uruchom SQL migrację / Версії файлів неактивні: запустіть SQL міграцію', 'warning')
+        return
+      }
+      throw insertVersionError
+    }
+    await logAudit(profile.id, 'create_file_version', 'document_file', file.id, { reason, version_no: nextVersion })
+  }, [versionTableReady, document.id, profile.id, addToast])
 
   const handleUpload = async (e) => {
     const selectedFiles = Array.from(e.target.files || [])
@@ -665,6 +746,14 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
 
   const handleDelete = async (fileId, filePath) => {
     if (!confirm('Usunąć plik? / Видалити файл?')) return
+    const fileRecord = files.find(f => f.id === fileId)
+    if (fileRecord && versionTableReady) {
+      try {
+        await snapshotCurrentVersion(fileRecord, 'before_delete')
+      } catch (err) {
+        addToast(`Błąd wersji przed usunięciem: ${sanitizeText(err?.message || 'snapshot_failed')}`, 'warning')
+      }
+    }
     await supabase.storage.from('documents').remove([filePath])
     await supabase.from('document_files').delete().eq('id', fileId)
     await logAudit(profile.id, 'delete_file', 'document_file', fileId)
@@ -769,6 +858,13 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
     if (!previewFile) return
     setSavingText(true)
     try {
+      if (versionTableReady) {
+        try {
+          await snapshotCurrentVersion(previewFile, 'before_inline_edit')
+        } catch (err) {
+          addToast(`Błąd wersji: ${sanitizeText(err?.message || 'version_failed')}`, 'warning')
+        }
+      }
       const blob = new Blob([previewText], { type: previewFile.mime_type || 'text/plain' })
       const { error: uploadError } = await supabase.storage
         .from('documents')
@@ -789,6 +885,52 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
       addToast(`Błąd zapisu: ${sanitizeText(err?.message || 'save_failed')}`, 'error')
     } finally {
       setSavingText(false)
+    }
+  }
+
+  const rollbackVersion = async (file, version) => {
+    if (!file || !version) return
+    setRollingBackVersionId(version.id)
+    try {
+      if (versionTableReady) {
+        try {
+          await snapshotCurrentVersion(file, `before_rollback_to_v${version.version_no}`)
+        } catch (err) {
+          addToast(`Błąd snapshotu rollback: ${sanitizeText(err?.message || 'rollback_snapshot_failed')}`, 'warning')
+        }
+      }
+
+      const { data: versionBlob, error: versionDownloadError } = await supabase.storage
+        .from('documents')
+        .download(version.storage_path)
+      if (versionDownloadError) throw versionDownloadError
+
+      const { error: restoreError } = await supabase.storage
+        .from('documents')
+        .upload(file.file_path, versionBlob, { upsert: true })
+      if (restoreError) throw restoreError
+
+      await supabase
+        .from('document_files')
+        .update({
+          file_size: version.file_size || file.file_size,
+          mime_type: version.mime_type || file.mime_type,
+          file_type: version.file_type || file.file_type
+        })
+        .eq('id', file.id)
+
+      await logAudit(profile.id, 'rollback_file_version', 'document_file', file.id, { version_no: version.version_no })
+      addToast(`Rollback do v${version.version_no} / Відкат до v${version.version_no}`, 'success')
+      await loadFiles()
+      await loadVersionsForFile(file.id)
+      onUpdate?.()
+      if (previewFile?.id === file.id) {
+        setPreviewFile({ ...previewFile, file_size: version.file_size || previewFile.file_size })
+      }
+    } catch (err) {
+      addToast(`Błąd rollback: ${sanitizeText(err?.message || 'rollback_failed')}`, 'error')
+    } finally {
+      setRollingBackVersionId(null)
     }
   }
 
@@ -822,12 +964,49 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
               <div className="file-actions">
                 <button onClick={() => openInlinePreview(file)} aria-label="Podgląd wewnętrzny / Вбудований перегляд">🧾</button>
                 <button onClick={() => handlePreview(file.file_path)} aria-label="Podgląd zewnętrzny / Зовнішній перегляд">👁️</button>
+                <button
+                  onClick={async () => {
+                    const open = expandedVersionFileId === file.id
+                    setExpandedVersionFileId(open ? null : file.id)
+                    if (!open) await loadVersionsForFile(file.id)
+                  }}
+                  aria-label="Wersje / Версії"
+                >
+                  🕘
+                </button>
                 <button onClick={() => handleDownload(file.file_path, file.file_name)} aria-label="Pobierz / Завантажити">⬇️</button>
                 {canDelete && <button onClick={() => handleDelete(file.id, file.file_path)} aria-label="Usuń / Видалити">🗑️</button>}
                 {profile?.side === 'FNU' && profile?.role === 'super_admin' && (
                   <button onClick={() => publishToOperator(file.id)} aria-label="Opublikuj dla OPERATOR" className="btn-publish">📤</button>
                 )}
               </div>
+              {expandedVersionFileId === file.id && (
+                <div className="file-versions">
+                  {loadingVersionsByFile[file.id] ? (
+                    <span className="file-versions-empty">Ładowanie wersji... / Завантаження версій...</span>
+                  ) : (
+                    <>
+                      {(versionsByFile[file.id] || []).length === 0 ? (
+                        <span className="file-versions-empty">Brak wersji / Немає версій</span>
+                      ) : (
+                        (versionsByFile[file.id] || []).map(v => (
+                          <div key={v.id} className="file-version-item">
+                            <span>v{v.version_no}</span>
+                            <span>{new Date(v.created_at).toLocaleString()}</span>
+                            <button
+                              type="button"
+                              onClick={() => rollbackVersion(file, v)}
+                              disabled={rollingBackVersionId === v.id}
+                            >
+                              {rollingBackVersionId === v.id ? '...' : 'Rollback'}
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </li>
           )
         })}
