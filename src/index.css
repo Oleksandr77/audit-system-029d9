@@ -337,7 +337,102 @@ body {
    ===================================================== */
 .app main {
   padding: 1.5rem;
-  padding-bottom: min(46vh, 430px);
+  padding-bottom: 1.5rem;
+}
+
+.workspace-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 420px;
+  gap: 1rem;
+  align-items: start;
+  padding: 0 1rem 1rem;
+}
+
+.content-pane {
+  min-width: 0;
+}
+
+.right-rail {
+  position: sticky;
+  top: 5.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: calc(100vh - 6.2rem);
+}
+
+.context-toolbar {
+  display: grid;
+  grid-template-columns: 1fr 230px 1fr;
+  gap: 0.7rem;
+  margin-bottom: 1rem;
+}
+
+.context-chip {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+
+.context-chip strong {
+  font-size: 0.86rem;
+}
+
+.context-chip select,
+.context-chip input {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.45rem 0.55rem;
+  font-size: 0.84rem;
+}
+
+.smart-inbox {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 0.8rem;
+}
+
+.smart-inbox h4 {
+  margin-bottom: 0.6rem;
+  font-size: 0.95rem;
+}
+
+.inbox-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.inbox-card {
+  border-radius: 10px;
+  padding: 0.55rem;
+  border: 1px solid transparent;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.inbox-card.danger { background: #fff2f2; border-color: #fecaca; }
+.inbox-card.warning { background: #fff8ea; border-color: #fde68a; }
+.inbox-card.success { background: #ecfdf3; border-color: #bbf7d0; }
+.inbox-card.muted { background: #f6f8fa; border-color: #dbe2e7; }
+
+.inbox-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  min-width: 1.6rem;
+}
+
+.inbox-label {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
 }
 
 .section-header {
@@ -775,33 +870,28 @@ body {
    CHAT PANEL
    ===================================================== */
 .chat-panel {
-  position: fixed;
-  left: 0.75rem;
-  right: 0.75rem;
-  bottom: 0.75rem;
-  height: min(42vh, 390px);
-  max-width: 1180px;
-  margin: 0 auto;
+  position: relative;
+  height: clamp(340px, 52vh, 680px);
+  width: 100%;
   background: rgba(255, 255, 255, 0.97);
   border: 1px solid rgba(23, 68, 84, 0.18);
   box-shadow: 0 18px 50px rgba(5, 20, 28, 0.22);
-  border-radius: 18px;
+  border-radius: 14px;
   display: flex;
   flex-direction: column;
-  z-index: 1005;
   overflow: hidden;
 }
 
-.chat-panel.chat-size-compact {
-  height: min(26vh, 250px);
+.chat-panel.dock-collapsed {
+  height: 88px;
 }
 
-.chat-panel.chat-size-regular {
-  height: min(42vh, 390px);
+.chat-panel.dock-panel {
+  height: clamp(340px, 52vh, 680px);
 }
 
-.chat-panel.chat-size-expanded {
-  height: min(66vh, 700px);
+.chat-panel.dock-focus {
+  height: clamp(460px, 72vh, 860px);
 }
 
 .chat-header {
@@ -1384,6 +1474,28 @@ body {
   color: var(--text-muted);
 }
 
+.audit-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.65rem;
+}
+
+.audit-footer span {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.audit-footer button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+}
+
 /* =====================================================
    BUTTONS
    ===================================================== */
@@ -1578,18 +1690,26 @@ body {
     padding-right: 0;
   }
 
+  .workspace-layout {
+    grid-template-columns: 1fr;
+    padding: 0 0.75rem 0.75rem;
+  }
+
+  .right-rail {
+    position: static;
+    max-height: none;
+  }
+
+  .context-toolbar {
+    grid-template-columns: 1fr;
+  }
+
   .sections-nav { padding: 0.75rem; }
   .doc-meta { grid-template-columns: 1fr; }
   .user-form .form-grid { grid-template-columns: 1fr; }
   .doc-item { flex-wrap: wrap; }
 
-  .app main { padding-bottom: 52vh; }
-  .chat-panel {
-    left: 0.5rem;
-    right: 0.5rem;
-    bottom: 0.5rem;
-    height: 52vh;
-  }
+  .chat-panel { height: min(56vh, 620px); }
   .chat-users { width: 145px; }
   .chat-language-controls label { display: none; }
   .attachment-target { grid-template-columns: 1fr 1fr; }
@@ -1603,11 +1723,8 @@ body {
   .header-left select { max-width: 150px; }
   .sections-nav button { padding: 0.4rem 0.75rem; }
   .doc-info { flex-direction: column; align-items: flex-start; }
-  .chat-panel {
-    left: 0.35rem;
-    right: 0.35rem;
-    height: 58vh;
-  }
+  .workspace-layout { padding: 0 0.45rem 0.6rem; }
+  .chat-panel { height: min(62vh, 560px); }
   .chat-users { display: none; }
   .chat-title-stack small { display: none; }
   .chat-language-controls { gap: 0.35rem; }
