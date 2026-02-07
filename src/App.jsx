@@ -257,7 +257,7 @@ async function llmTranslateStrict(text, source, target) {
 
   return await callLlmWithRetry(async () => {
     const { data, error } = await callWithTimeout(
-      supabase.functions.invoke('smart-api', {
+      supabase.functions.invoke('llm-translator', {
         body: {
           mode: 'translate',
           source_language: source,
@@ -287,7 +287,7 @@ async function llmSuggestCompletions(prefix, language, context = '') {
 
   return await callLlmWithRetry(async () => {
     const { data, error } = await callWithTimeout(
-      supabase.functions.invoke('smart-api', {
+      supabase.functions.invoke('llm-translator', {
         body: {
           mode: 'suggest',
           language,
