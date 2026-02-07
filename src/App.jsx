@@ -468,18 +468,71 @@ function Auth() {
 
   return (
     <div className="auth-container">
-      <div className="auth-box">
-        <h1>Audit System</h1>
-        <p className="auth-subtitle">
-          <span className="text-pl">System zarządzania dokumentami audytu</span><br/>
-          <span className="text-uk">Система управління документами аудиту</span>
-        </p>
-        <form onSubmit={handleSubmit}>
-          <input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email" />
-          <input type="password" placeholder="Hasło / Пароль" value={password} onChange={e => setPassword(e.target.value)} required autoComplete="current-password" />
-          {error && <div className="error" role="alert">{error}</div>}
-          <button type="submit" disabled={loading}>{loading ? '...' : 'Zaloguj / Увійти'}</button>
-        </form>
+      <div className="auth-shell">
+        <aside className="auth-hero" aria-label="FNU education visual">
+          <div className="auth-brand">
+            <div className="auth-brand-mark" aria-hidden="true">
+              <svg viewBox="0 0 100 100" role="img">
+                <polygon points="50,7 82,25 82,62 50,81 18,62 18,25" fill="none" stroke="currentColor" strokeWidth="8" />
+                <circle cx="50" cy="44" r="12" fill="none" stroke="currentColor" strokeWidth="6" />
+              </svg>
+            </div>
+            <div>
+              <p className="auth-brand-top">Foundation</p>
+              <h2>Unbreakable Ukraine</h2>
+            </div>
+          </div>
+
+          <p className="auth-hero-title">
+            <span className="text-pl">Audyt edukacji i dokumentów szkół</span><br />
+            <span className="text-uk">Аудит освіти та документації шкіл</span>
+          </p>
+
+          <div className="auth-hero-grid">
+            <div className="auth-scene-card scene-school">
+              <div className="scene-icon" aria-hidden="true">🏫</div>
+              <strong>Szkoły / Школи</strong>
+              <span>Dokumenty, statuty, raporty</span>
+            </div>
+            <div className="auth-scene-card scene-students">
+              <div className="scene-icon" aria-hidden="true">🧑‍🎓</div>
+              <strong>Uczniowie / Учні</strong>
+              <span>Proces, jakość, bezpieczeństwo</span>
+            </div>
+            <div className="auth-scene-card scene-online">
+              <div className="scene-icon" aria-hidden="true">💻</div>
+              <strong>Zdalna nauka / Дистанційка</strong>
+              <span>Platformy i komunikacja</span>
+            </div>
+            <div className="auth-scene-card scene-subjects">
+              <div className="scene-icon" aria-hidden="true">📚</div>
+              <strong>Przedmioty / Предмети</strong>
+              <span>Matematyka, języki, nauki</span>
+            </div>
+          </div>
+
+          <div className="auth-flag-strip" aria-label="PL-UA collaboration">
+            <span className="flag-pill flag-pl">PL</span>
+            <span className="flag-link">↔</span>
+            <span className="flag-pill flag-ua">UA</span>
+            <span className="flag-note">Wspólny standard edukacyjny / Спільний освітній стандарт</span>
+          </div>
+        </aside>
+
+        <section className="auth-box">
+          <p className="auth-kicker">Audit System</p>
+          <h1>Logowanie / Вхід</h1>
+          <p className="auth-subtitle">
+            <span className="text-pl">System zarządzania dokumentami audytu</span><br />
+            <span className="text-uk">Система управління документами аудиту</span>
+          </p>
+          <form onSubmit={handleSubmit}>
+            <input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email" />
+            <input type="password" placeholder="Hasło / Пароль" value={password} onChange={e => setPassword(e.target.value)} required autoComplete="current-password" />
+            {error && <div className="error" role="alert">{error}</div>}
+            <button type="submit" disabled={loading}>{loading ? '...' : 'Zaloguj / Увійти'}</button>
+          </form>
+        </section>
       </div>
     </div>
   )
