@@ -540,7 +540,12 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
   useEffect(() => { loadFiles() }, [loadFiles])
 
   const handleUpload = async (e) => {
-    const selectedFiles = Array.from(e.target.files)
+    const selectedFiles = Array.from(e.target.files || [])
+    if (selectedFiles.length === 0) return
+    if (!profile?.id) {
+      addToast('Brak profilu użytkownika / Немає профілю користувача', 'error')
+      return
+    }
     if (files.length + selectedFiles.length > MAX_FILES_PER_DOC) {
       addToast(`Maksymalnie ${MAX_FILES_PER_DOC} plików / Максимум ${MAX_FILES_PER_DOC} файлів`, 'error')
       return
@@ -553,6 +558,8 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
     const CONCURRENT_UPLOADS = 3
     let completed = 0
     const total = selectedFiles.length
+    let successCount = 0
+    let failedCount = 0
 
     for (let i = 0; i < selectedFiles.length; i += CONCURRENT_UPLOADS) {
       if (abortControllerRef.current?.signal.aborted) break
@@ -565,6 +572,7 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
         const validation = validateFile(file)
         if (!validation.valid) {
           addToast(validation.error, 'error')
+          failedCount++
           completed++
           return
         }
@@ -601,8 +609,11 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
               visible_to_operator: false
             })
           }
+          successCount++
         } catch (err) {
-          addToast(`Błąd: ${file.name}`, 'error')
+          failedCount++
+          const reason = sanitizeText(err?.message || 'upload_failed')
+          addToast(`Błąd: ${file.name} (${reason})`, 'error')
           console.error('Upload error:', err)
         }
 
@@ -612,7 +623,13 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
     }
 
     if (!abortControllerRef.current?.signal.aborted) {
-      addToast('Pliki przesłane / Файли завантажено', 'success')
+      if (successCount > 0 && failedCount === 0) {
+        addToast(`Pliki przesłane (${successCount}) / Файли завантажено (${successCount})`, 'success')
+      } else if (successCount > 0 && failedCount > 0) {
+        addToast(`Częściowo: ${successCount} OK, ${failedCount} błędów / Частково: ${successCount} OK, ${failedCount} помилок`, 'warning')
+      } else if (failedCount > 0) {
+        addToast('Wysyłka nieudana / Завантаження не вдалося', 'error')
+      }
     }
     setUploading(false)
     setUploadProgress(0)
