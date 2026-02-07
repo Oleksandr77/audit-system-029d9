@@ -510,7 +510,8 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
   const loadFiles = useCallback(async () => {
     if (!document?.id || !isValidUUID(document.id)) return
 
-    let query = supabase.from('document_files').select('*').eq('document_id', document.id).order('created_at')
+    const baseQuery = supabase.from('document_files').select('*').eq('document_id', document.id)
+    let query = baseQuery.order('created_at')
 
     if (profile?.side === 'OPERATOR') {
       const { data: accessData } = await supabase
@@ -533,9 +534,24 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
       }
     }
 
-    const { data } = await query
+    let { data, error } = await query
+    if (error && /created_at/i.test(error.message || '')) {
+      const fallbackResult = await baseQuery.order('uploaded_at')
+      data = fallbackResult.data
+      error = fallbackResult.error
+    }
+    if (error && /uploaded_at/i.test(error.message || '')) {
+      const fallbackNoOrder = await baseQuery
+      data = fallbackNoOrder.data
+      error = fallbackNoOrder.error
+    }
+    if (error) {
+      addToast(`Błąd listy plików: ${sanitizeText(error.message || 'query_failed')}`, 'error')
+      safeSetState(setFiles)([])
+      return
+    }
     safeSetState(setFiles)(data || [])
-  }, [document?.id, profile?.side, safeSetState])
+  }, [document?.id, profile?.side, safeSetState, addToast])
 
   useEffect(() => { loadFiles() }, [loadFiles])
 
