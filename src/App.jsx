@@ -492,6 +492,12 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
   const [files, setFiles] = useState([])
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [previewFile, setPreviewFile] = useState(null)
+  const [previewUrl, setPreviewUrl] = useState('')
+  const [previewText, setPreviewText] = useState('')
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [editingText, setEditingText] = useState(false)
+  const [savingText, setSavingText] = useState(false)
   const fileInputRef = useRef(null)
   const abortControllerRef = useRef(null)
   const addToast = useToast()
@@ -504,8 +510,11 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort()
       }
+      if (previewUrl && previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(previewUrl)
+      }
     }
-  }, [])
+  }, [previewUrl])
 
   const loadFiles = useCallback(async () => {
     if (!document?.id || !isValidUUID(document.id)) return
@@ -662,6 +671,12 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
     loadFiles()
     onUpdate?.()
     addToast('Plik usunięty / Файл видалено', 'success')
+    if (previewFile?.id === fileId) {
+      setPreviewFile(null)
+      setPreviewText('')
+      if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl)
+      setPreviewUrl('')
+    }
   }
 
   const handleDownload = async (filePath, fileName) => {
@@ -719,6 +734,64 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
     }
   }
 
+  const openInlinePreview = async (file) => {
+    setPreviewFile(file)
+    setEditingText(false)
+    setPreviewText('')
+    if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl)
+    setPreviewUrl('')
+    setPreviewLoading(true)
+
+    const ext = (file.file_type || getFileExtension(file.file_name)).toLowerCase()
+    const isTextLike = ['txt', 'csv'].includes(ext) || (file.mime_type || '').startsWith('text/')
+
+    try {
+      if (isTextLike) {
+        const { data, error } = await supabase.storage.from('documents').download(file.file_path)
+        if (error) throw error
+        const text = await data.text()
+        setPreviewText(text)
+      } else {
+        const { data, error } = await supabase.storage.from('documents').createSignedUrl(file.file_path, 3600)
+        if (error) throw error
+        setPreviewUrl(data?.signedUrl || '')
+      }
+      await logAudit(profile.id, 'view_file', 'document_file', document.id)
+    } catch (err) {
+      addToast(`Błąd podglądu: ${sanitizeText(err?.message || 'preview_failed')}`, 'error')
+      setPreviewFile(null)
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  const saveInlineText = async () => {
+    if (!previewFile) return
+    setSavingText(true)
+    try {
+      const blob = new Blob([previewText], { type: previewFile.mime_type || 'text/plain' })
+      const { error: uploadError } = await supabase.storage
+        .from('documents')
+        .upload(previewFile.file_path, blob, { upsert: true })
+      if (uploadError) throw uploadError
+
+      await supabase
+        .from('document_files')
+        .update({ file_size: blob.size })
+        .eq('id', previewFile.id)
+
+      await logAudit(profile.id, 'edit_file', 'document_file', previewFile.id, { mode: 'inline-text' })
+      addToast('Zapisano zmiany / Зміни збережено', 'success')
+      setEditingText(false)
+      loadFiles()
+      onUpdate?.()
+    } catch (err) {
+      addToast(`Błąd zapisu: ${sanitizeText(err?.message || 'save_failed')}`, 'error')
+    } finally {
+      setSavingText(false)
+    }
+  }
+
   if (!canView) return null
 
   return (
@@ -747,7 +820,8 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
               <span className="file-name" title={file.file_name}>{file.file_name}</span>
               <span className="file-size">{(file.file_size / 1024 / 1024).toFixed(2)} MB</span>
               <div className="file-actions">
-                <button onClick={() => handlePreview(file.file_path)} aria-label="Podgląd / Перегляд">👁️</button>
+                <button onClick={() => openInlinePreview(file)} aria-label="Podgląd wewnętrzny / Вбудований перегляд">🧾</button>
+                <button onClick={() => handlePreview(file.file_path)} aria-label="Podgląd zewnętrzny / Зовнішній перегляд">👁️</button>
                 <button onClick={() => handleDownload(file.file_path, file.file_name)} aria-label="Pobierz / Завантажити">⬇️</button>
                 {canDelete && <button onClick={() => handleDelete(file.id, file.file_path)} aria-label="Usuń / Видалити">🗑️</button>}
                 {profile?.side === 'FNU' && profile?.role === 'super_admin' && (
@@ -759,6 +833,57 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
         })}
         {files.length === 0 && <li className="no-files"><BiText pl="Brak plików" uk="Немає файлів" /></li>}
       </ul>
+
+      {previewFile && (
+        <div className="inline-preview">
+          <div className="inline-preview-header">
+            <strong><SafeText>{previewFile.file_name}</SafeText></strong>
+            <div className="inline-preview-actions">
+              {(previewFile.file_type === 'txt' || previewFile.file_type === 'csv' || (previewFile.mime_type || '').startsWith('text/')) && (
+                <>
+                  {!editingText ? (
+                    <button type="button" onClick={() => setEditingText(true)}>✏️ Edytuj / Редагувати</button>
+                  ) : (
+                    <button type="button" onClick={saveInlineText} disabled={savingText}>{savingText ? '...' : '💾 Zapisz / Зберегти'}</button>
+                  )}
+                </>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setPreviewFile(null)
+                  setPreviewText('')
+                  if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl)
+                  setPreviewUrl('')
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          {previewLoading ? (
+            <div className="inline-preview-loading">Ładowanie... / Завантаження...</div>
+          ) : (
+            <>
+              {(previewFile.file_type === 'txt' || previewFile.file_type === 'csv' || (previewFile.mime_type || '').startsWith('text/')) ? (
+                editingText ? (
+                  <textarea
+                    className="inline-text-editor"
+                    value={previewText}
+                    onChange={e => setPreviewText(e.target.value)}
+                    aria-label="Edytor pliku tekstowego"
+                  />
+                ) : (
+                  <pre className="inline-text-preview">{previewText}</pre>
+                )
+              ) : (
+                <iframe className="inline-file-frame" src={previewUrl} title={previewFile.file_name} />
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -2139,6 +2264,34 @@ function SmartInbox({ documents, profile }) {
   )
 }
 
+function InlineDocumentDrawer({ document, onUpdate, displayLanguage }) {
+  const profile = useProfile()
+  const isSuperAdmin = profile?.role === 'super_admin'
+  const isAdmin = isSuperAdmin || profile?.role === 'lawyer_admin'
+  const canAdd = isAdmin || profile?.side === 'FNU'
+  const canDelete = isAdmin
+  const canComment = true
+  const canView = true
+
+  return (
+    <div className="inline-doc-drawer">
+      <div className="inline-doc-meta">
+        <span className="doc-code">{document.code}</span>
+        <strong><SafeText>{document.name_pl}</SafeText></strong>
+        <span><SafeText>{document.name_uk}</SafeText></span>
+      </div>
+      <div className="inline-doc-panels">
+        <ErrorBoundary>
+          <FileUpload document={document} onUpdate={onUpdate} canAdd={canAdd} canDelete={canDelete} canView={canView} />
+        </ErrorBoundary>
+        <ErrorBoundary>
+          <Comments document={document} canComment={canComment} canView={canView} displayLanguage={displayLanguage} />
+        </ErrorBoundary>
+      </div>
+    </div>
+  )
+}
+
 // =====================================================
 // MAIN APP COMPONENT
 // =====================================================
@@ -2152,6 +2305,7 @@ function AppContent() {
   const [activeSection, setActiveSection] = useState(null)
   const [documents, setDocuments] = useState([])
   const [selectedDocument, setSelectedDocument] = useState(null)
+  const [expandedDocId, setExpandedDocId] = useState(null)
   const [showUserManagement, setShowUserManagement] = useState(false)
   const [showAuditLog, setShowAuditLog] = useState(false)
   const [showSectionManager, setShowSectionManager] = useState(false)
@@ -2261,6 +2415,10 @@ function AppContent() {
     setChatInitialDraft(`Pytanie dot. ${doc.code} / Питання щодо ${doc.code}: `)
   }
 
+  const toggleDocumentDrawer = (docId) => {
+    setExpandedDocId(prev => (prev === docId ? null : docId))
+  }
+
   return (
     <ProfileContext.Provider value={profile}>
       <div className="app">
@@ -2363,49 +2521,68 @@ function AppContent() {
 
             <div className="documents-list" role="list" aria-label="Lista dokumentów">
               {filteredDocuments.map(doc => (
-                <article
-                  key={doc.id}
-                  className={`doc-item ${doc.status || 'pending'}`}
-                  onClick={() => setSelectedDocument(doc)}
-                  tabIndex={0}
-                  onKeyPress={e => e.key === 'Enter' && setSelectedDocument(doc)}
-                  role="listitem"
-                  aria-label={`${doc.code} - ${doc.name_pl}`}
-                >
-                  <div className="doc-info">
-                    <span className="doc-code">{doc.code}</span>
-                    <div className="doc-names">
-                      <span className="name-pl"><SafeText>{doc.name_pl}</SafeText></span>
-                      <span className="name-uk"><SafeText>{doc.name_uk}</SafeText></span>
+                <div key={doc.id} className="doc-row">
+                  <article
+                    className={`doc-item ${doc.status || 'pending'}`}
+                    onClick={() => toggleDocumentDrawer(doc.id)}
+                    tabIndex={0}
+                    onKeyPress={e => e.key === 'Enter' && toggleDocumentDrawer(doc.id)}
+                    role="listitem"
+                    aria-label={`${doc.code} - ${doc.name_pl}`}
+                  >
+                    <div className="doc-info">
+                      <span className="doc-code">{doc.code}</span>
+                      <div className="doc-names">
+                        <span className="name-pl"><SafeText>{doc.name_pl}</SafeText></span>
+                        <span className="name-uk"><SafeText>{doc.name_uk}</SafeText></span>
+                      </div>
                     </div>
-                  </div>
-                  {doc.responsible && (
-                    <span className="doc-responsible">
-                      <SafeText>{doc.responsible.full_name || doc.responsible.email}</SafeText>
-                      <span className={`side-badge small ${doc.responsible.side?.toLowerCase()}`}>{doc.responsible.side}</span>
-                    </span>
+                    {doc.responsible && (
+                      <span className="doc-responsible">
+                        <SafeText>{doc.responsible.full_name || doc.responsible.email}</SafeText>
+                        <span className={`side-badge small ${doc.responsible.side?.toLowerCase()}`}>{doc.responsible.side}</span>
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      className="doc-chat-btn"
+                      onClick={e => {
+                        e.stopPropagation()
+                        startDiscussionFromDocument(doc)
+                      }}
+                      aria-label={`Omów dokument ${doc.code}`}
+                    >
+                      💬 Omów / Обговорити
+                    </button>
+                    <button
+                      type="button"
+                      className="doc-detail-btn"
+                      onClick={e => {
+                        e.stopPropagation()
+                        setSelectedDocument(doc)
+                      }}
+                      aria-label={`Szczegóły dokumentu ${doc.code}`}
+                    >
+                      🗂️ Pliki
+                    </button>
+                    <select
+                      value={doc.status || 'pending'}
+                      onChange={e => { e.stopPropagation(); updateStatus(doc.id, e.target.value) }}
+                      onClick={e => e.stopPropagation()}
+                      disabled={!isAdmin}
+                      aria-label={`Status dokumentu ${doc.code}`}
+                    >
+                      {STATUS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.pl}</option>)}
+                    </select>
+                  </article>
+                  {expandedDocId === doc.id && (
+                    <InlineDocumentDrawer
+                      document={doc}
+                      onUpdate={loadDocuments}
+                      displayLanguage={resolveLanguageMode(chatLanguageMode, profile?.side)}
+                    />
                   )}
-                  <button
-                    type="button"
-                    className="doc-chat-btn"
-                    onClick={e => {
-                      e.stopPropagation()
-                      startDiscussionFromDocument(doc)
-                    }}
-                    aria-label={`Omów dokument ${doc.code}`}
-                  >
-                    💬 Omów / Обговорити
-                  </button>
-                  <select
-                    value={doc.status || 'pending'}
-                    onChange={e => { e.stopPropagation(); updateStatus(doc.id, e.target.value) }}
-                    onClick={e => e.stopPropagation()}
-                    disabled={!isAdmin}
-                    aria-label={`Status dokumentu ${doc.code}`}
-                  >
-                    {STATUS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.pl}</option>)}
-                  </select>
-                </article>
+                </div>
               ))}
               {filteredDocuments.length === 0 && <div className="no-docs"><BiText pl="Brak dokumentów" uk="Немає документів" /></div>}
             </div>

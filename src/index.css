@@ -480,6 +480,12 @@ body {
   gap: 0.75rem;
 }
 
+.doc-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
 .doc-item {
   display: flex;
   align-items: center;
@@ -550,6 +556,50 @@ body {
   border-radius: 6px;
   font-size: 0.85rem;
   background: white;
+}
+
+.doc-detail-btn {
+  border: 1px solid rgba(23, 68, 84, 0.25);
+  background: #fff;
+  border-radius: 8px;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.doc-detail-btn:hover {
+  background: rgba(23, 68, 84, 0.09);
+  border-color: rgba(23, 68, 84, 0.45);
+}
+
+.inline-doc-drawer {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.8rem;
+  box-shadow: var(--shadow);
+}
+
+.inline-doc-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.7rem;
+}
+
+.inline-doc-meta strong {
+  font-size: 0.9rem;
+}
+
+.inline-doc-meta span:last-child {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.inline-doc-panels {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.85rem;
 }
 
 .no-docs {
@@ -761,6 +811,75 @@ body {
   padding: 1rem;
   color: var(--text-muted);
   font-size: 0.9rem;
+}
+
+.inline-preview {
+  margin-top: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.inline-preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border-bottom: 1px solid var(--border);
+  background: #f8fafb;
+}
+
+.inline-preview-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.inline-preview-actions button {
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 6px;
+  padding: 0.22rem 0.5rem;
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+
+.inline-preview-loading {
+  padding: 0.75rem;
+  color: var(--text-muted);
+}
+
+.inline-file-frame {
+  width: 100%;
+  min-height: 420px;
+  border: none;
+}
+
+.inline-text-preview {
+  margin: 0;
+  padding: 0.8rem;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+}
+
+.inline-text-editor {
+  width: 100%;
+  min-height: 360px;
+  border: none;
+  border-top: 1px solid var(--border);
+  padding: 0.8rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  resize: vertical;
+}
+
+.inline-text-editor:focus {
+  outline: none;
 }
 
 /* =====================================================
