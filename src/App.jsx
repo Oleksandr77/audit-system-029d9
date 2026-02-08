@@ -499,16 +499,43 @@ function Auth() {
 
           <div className="auth-hero-grid">
             <div className="auth-scene-card scene-school">
-              <div className="scene-icon" aria-hidden="true">🏫</div>
+              <span className="scene-beam" aria-hidden="true" />
+              <svg className="scene-illustration" viewBox="0 0 220 120" aria-hidden="true">
+                <path d="M22 56 L110 20 L198 56 L110 90 Z" />
+                <path d="M42 60 L42 104 L178 104 L178 60" />
+                <path d="M110 60 L110 104" />
+                <path d="M82 72 L82 104" />
+                <path d="M138 72 L138 104" />
+                <circle cx="110" cy="44" r="9" />
+              </svg>
             </div>
             <div className="auth-scene-card scene-students">
-              <div className="scene-icon" aria-hidden="true">🧑‍🎓</div>
+              <span className="scene-beam" aria-hidden="true" />
+              <svg className="scene-illustration" viewBox="0 0 220 120" aria-hidden="true">
+                <circle cx="112" cy="38" r="13" />
+                <path d="M72 92 Q112 52 152 92" />
+                <path d="M86 34 L112 19 L138 34 L112 46 Z" />
+                <path d="M138 34 L156 46" />
+                <path d="M54 96 L168 96" />
+              </svg>
             </div>
             <div className="auth-scene-card scene-online">
-              <div className="scene-icon" aria-hidden="true">💻</div>
+              <span className="scene-beam" aria-hidden="true" />
+              <svg className="scene-illustration" viewBox="0 0 220 120" aria-hidden="true">
+                <rect x="52" y="24" width="116" height="54" rx="7" />
+                <path d="M36 90 L184 90" />
+                <path d="M70 82 L150 82" />
+                <path d="M96 68 L124 68" />
+              </svg>
             </div>
             <div className="auth-scene-card scene-subjects">
-              <div className="scene-icon" aria-hidden="true">📚</div>
+              <span className="scene-beam" aria-hidden="true" />
+              <svg className="scene-illustration" viewBox="0 0 220 120" aria-hidden="true">
+                <rect x="62" y="20" width="24" height="76" rx="4" />
+                <rect x="96" y="16" width="24" height="80" rx="4" />
+                <rect x="130" y="24" width="24" height="72" rx="4" />
+                <path d="M56 96 L160 96" />
+              </svg>
             </div>
           </div>
 

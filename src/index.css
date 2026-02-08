@@ -305,30 +305,74 @@ body {
 
 .auth-scene-card {
   border-radius: 14px;
-  padding: 0.85rem;
+  padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.08);
-  min-height: 84px;
-  display: grid;
-  place-items: center;
+  min-height: 168px;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(145deg, rgba(10, 44, 58, 0.88), rgba(18, 79, 103, 0.52));
 }
 
-.scene-icon {
-  width: 52px;
-  height: 52px;
-  border-radius: 16px;
-  display: grid;
-  place-items: center;
-  font-size: 1.45rem;
-  background: rgba(255, 255, 255, 0.16);
-  border: 1px solid rgba(214, 232, 241, 0.32);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.26);
+.auth-scene-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 30% 8%, rgba(255, 222, 145, 0.18), transparent 48%);
+  opacity: 0.9;
 }
 
-.scene-school { background: linear-gradient(145deg, rgba(255, 122, 89, 0.2), rgba(255, 255, 255, 0.08)); }
-.scene-students { background: linear-gradient(145deg, rgba(250, 224, 189, 0.17), rgba(255, 255, 255, 0.08)); }
-.scene-online { background: linear-gradient(145deg, rgba(53, 106, 125, 0.36), rgba(255, 255, 255, 0.08)); }
-.scene-subjects { background: linear-gradient(145deg, rgba(90, 126, 143, 0.32), rgba(255, 255, 255, 0.08)); }
+.scene-beam {
+  position: absolute;
+  left: -24%;
+  top: 22%;
+  width: 160%;
+  height: 28px;
+  transform: rotate(-30deg);
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(205, 232, 242, 0.75), rgba(255, 255, 255, 0));
+  opacity: 0.58;
+}
+
+.scene-illustration {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 20px 24px;
+  z-index: 1;
+}
+
+.scene-illustration * {
+  fill: none;
+  stroke: rgba(232, 247, 252, 0.9);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 1px 2px rgba(6, 21, 30, 0.42));
+}
+
+.scene-school {
+  background:
+    linear-gradient(145deg, rgba(29, 56, 76, 0.76), rgba(19, 72, 95, 0.56)),
+    radial-gradient(circle at 84% 85%, rgba(255, 122, 89, 0.2), transparent 58%);
+}
+
+.scene-students {
+  background:
+    linear-gradient(145deg, rgba(23, 58, 77, 0.8), rgba(14, 72, 95, 0.55)),
+    radial-gradient(circle at 84% 85%, rgba(255, 173, 112, 0.22), transparent 60%);
+}
+
+.scene-online {
+  background:
+    linear-gradient(145deg, rgba(14, 63, 82, 0.86), rgba(17, 81, 106, 0.6)),
+    radial-gradient(circle at 84% 85%, rgba(122, 211, 230, 0.17), transparent 58%);
+}
+
+.scene-subjects {
+  background:
+    linear-gradient(145deg, rgba(16, 60, 80, 0.84), rgba(19, 84, 110, 0.62)),
+    radial-gradient(circle at 84% 85%, rgba(250, 224, 189, 0.2), transparent 58%);
+}
 
 .auth-art-strip {
   margin-top: 0.85rem;
