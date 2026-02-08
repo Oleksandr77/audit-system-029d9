@@ -305,32 +305,24 @@ body {
 
 .auth-scene-card {
   border-radius: 14px;
-  padding: 0.85rem 0.9rem;
+  padding: 0.85rem;
   border: 1px solid rgba(255, 255, 255, 0.2);
   background: rgba(255, 255, 255, 0.08);
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-
-.auth-scene-card strong {
-  font-size: 0.88rem;
-  line-height: 1.2;
-}
-
-.auth-scene-card span {
-  font-size: 0.76rem;
-  color: #d6e4ea;
+  min-height: 84px;
+  display: grid;
+  place-items: center;
 }
 
 .scene-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
   display: grid;
   place-items: center;
-  font-size: 1rem;
-  background: rgba(255, 255, 255, 0.14);
+  font-size: 1.45rem;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(214, 232, 241, 0.32);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.26);
 }
 
 .scene-school { background: linear-gradient(145deg, rgba(255, 122, 89, 0.2), rgba(255, 255, 255, 0.08)); }
@@ -371,47 +363,26 @@ body {
   opacity: 0.58;
 }
 
-.edu-glyph {
+.edu-illustration {
   position: absolute;
-  left: 50%;
-  top: 34%;
-  width: 54px;
-  height: 32px;
-  transform: translate(-50%, -50%);
-}
-
-.edu-glyph::before,
-.edu-glyph::after {
-  content: '';
-  position: absolute;
-  border: 2px solid rgba(232, 247, 252, 0.84);
-  border-radius: 999px;
-}
-
-.glyph-school::before { width: 30px; height: 14px; left: 6px; top: 8px; transform: rotate(-17deg); }
-.glyph-school::after { width: 16px; height: 16px; left: 30px; top: 2px; }
-
-.glyph-student::before { width: 14px; height: 30px; left: 20px; top: 0; border-radius: 8px; }
-.glyph-student::after { width: 34px; height: 13px; left: 10px; top: 17px; border-radius: 8px; transform: rotate(-8deg); }
-
-.glyph-laptop::before { width: 31px; height: 14px; left: 8px; top: 8px; border-radius: 6px; transform: rotate(13deg); }
-.glyph-laptop::after { width: 38px; height: 11px; left: 6px; top: 20px; border-radius: 8px; }
-
-.glyph-books::before { width: 16px; height: 34px; left: 14px; top: -2px; border-radius: 9px; transform: rotate(-14deg); }
-.glyph-books::after { width: 34px; height: 14px; left: 12px; top: 16px; border-radius: 9px; }
-
-.glyph-lab::before { width: 26px; height: 12px; left: 10px; top: 8px; transform: rotate(-22deg); }
-.glyph-lab::after { width: 15px; height: 15px; left: 31px; top: 2px; }
-
-.art-tile p {
-  margin: 0;
-  position: relative;
+  inset: 0;
+  display: grid;
+  place-items: center;
   z-index: 2;
-  font-size: 0.66rem;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  font-weight: 700;
-  color: #cbe5ef;
+}
+
+.edu-illustration svg {
+  width: 84px;
+  height: 56px;
+}
+
+.edu-illustration svg * {
+  fill: none;
+  stroke: rgba(230, 247, 252, 0.9);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 1px 2px rgba(7, 22, 28, 0.35));
 }
 
 .auth-flag-strip {

@@ -500,51 +500,71 @@ function Auth() {
           <div className="auth-hero-grid">
             <div className="auth-scene-card scene-school">
               <div className="scene-icon" aria-hidden="true">🏫</div>
-              <strong>Szkoły / Школи</strong>
-              <span>Dokumenty, statuty, raporty</span>
             </div>
             <div className="auth-scene-card scene-students">
               <div className="scene-icon" aria-hidden="true">🧑‍🎓</div>
-              <strong>Uczniowie / Учні</strong>
-              <span>Proces, jakość, bezpieczeństwo</span>
             </div>
             <div className="auth-scene-card scene-online">
               <div className="scene-icon" aria-hidden="true">💻</div>
-              <strong>Zdalna nauka / Дистанційка</strong>
-              <span>Platformy i komunikacja</span>
             </div>
             <div className="auth-scene-card scene-subjects">
               <div className="scene-icon" aria-hidden="true">📚</div>
-              <strong>Przedmioty / Предмети</strong>
-              <span>Matematyka, języki, nauki</span>
             </div>
           </div>
 
           <div className="auth-art-strip" aria-label="Education themed visual tiles">
             <div className="art-tile tile-school">
               <span className="tile-beam" aria-hidden="true" />
-              <span className="edu-glyph glyph-school" aria-hidden="true" />
-              <p>Szkoly / Школи</p>
+              <span className="edu-illustration" aria-hidden="true">
+                <svg viewBox="0 0 120 80">
+                  <path d="M14 40 L60 20 L106 40 L60 58 Z" />
+                  <path d="M24 42 L24 66 L96 66 L96 42" />
+                  <path d="M60 42 L60 66" />
+                  <path d="M45 50 L45 66" />
+                  <path d="M75 50 L75 66" />
+                </svg>
+              </span>
             </div>
             <div className="art-tile tile-student">
               <span className="tile-beam" aria-hidden="true" />
-              <span className="edu-glyph glyph-student" aria-hidden="true" />
-              <p>Uczniowie / Учні</p>
+              <span className="edu-illustration" aria-hidden="true">
+                <svg viewBox="0 0 120 80">
+                  <circle cx="60" cy="26" r="9" />
+                  <path d="M40 56 Q60 36 80 56" />
+                  <path d="M48 24 L60 15 L72 24 L60 30 Z" />
+                  <path d="M72 24 L82 30" />
+                </svg>
+              </span>
             </div>
             <div className="art-tile tile-online">
               <span className="tile-beam" aria-hidden="true" />
-              <span className="edu-glyph glyph-laptop" aria-hidden="true" />
-              <p>Platformy / Платформи</p>
+              <span className="edu-illustration" aria-hidden="true">
+                <svg viewBox="0 0 120 80">
+                  <rect x="30" y="20" width="60" height="30" rx="4" />
+                  <path d="M22 56 L98 56" />
+                  <path d="M52 44 L68 44" />
+                </svg>
+              </span>
             </div>
             <div className="art-tile tile-books">
               <span className="tile-beam" aria-hidden="true" />
-              <span className="edu-glyph glyph-books" aria-hidden="true" />
-              <p>Przedmioty / Предмети</p>
+              <span className="edu-illustration" aria-hidden="true">
+                <svg viewBox="0 0 120 80">
+                  <rect x="34" y="20" width="14" height="40" rx="3" />
+                  <rect x="52" y="16" width="14" height="44" rx="3" />
+                  <rect x="70" y="22" width="14" height="38" rx="3" />
+                </svg>
+              </span>
             </div>
             <div className="art-tile tile-lab">
               <span className="tile-beam" aria-hidden="true" />
-              <span className="edu-glyph glyph-lab" aria-hidden="true" />
-              <p>Nauka / Наука</p>
+              <span className="edu-illustration" aria-hidden="true">
+                <svg viewBox="0 0 120 80">
+                  <path d="M52 16 L68 16" />
+                  <path d="M58 16 L58 34 L44 58 Q42 62 46 64 L74 64 Q78 62 76 58 L62 34 L62 16" />
+                  <path d="M48 50 Q60 44 72 50" />
+                </svg>
+              </span>
             </div>
           </div>
 
