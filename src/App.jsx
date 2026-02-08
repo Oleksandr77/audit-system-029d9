@@ -483,146 +483,89 @@ function Auth() {
             <div className="premium-panel panel-a" />
             <div className="premium-panel panel-b" />
             <div className="premium-panel panel-c" />
-
-            <svg className="premium-edu edu-a" viewBox="0 0 340 220">
-              <path d="M58 108 L170 64 L282 108 L170 154 Z" />
-              <path d="M86 112 L86 182 L254 182 L254 112" />
-              <path d="M170 112 L170 182" />
-              <path d="M130 126 L130 182" />
-              <path d="M210 126 L210 182" />
-              <circle cx="170" cy="94" r="12" />
-            </svg>
-
-            <svg className="premium-edu edu-b" viewBox="0 0 340 220">
-              <circle cx="168" cy="72" r="22" />
-              <path d="M106 166 Q168 102 230 166" />
-              <path d="M124 66 L168 42 L212 66 L168 86 Z" />
-              <path d="M212 66 L246 86" />
-              <path d="M84 172 L252 172" />
-            </svg>
-
-            <svg className="premium-edu edu-c" viewBox="0 0 340 220">
-              <rect x="86" y="54" width="168" height="78" rx="10" />
-              <path d="M64 156 L276 156" />
-              <path d="M108 144 L232 144" />
-              <path d="M148 120 L192 120" />
-            </svg>
           </div>
 
           <div className="auth-hero-content">
-          <div className="auth-brand">
-            <div className="auth-brand-mark" aria-hidden="true">
-              <svg viewBox="0 0 100 100" role="img">
-                <polygon points="50,7 82,25 82,62 50,81 18,62 18,25" fill="none" stroke="currentColor" strokeWidth="8" />
-                <circle cx="50" cy="44" r="12" fill="none" stroke="currentColor" strokeWidth="6" />
-              </svg>
-            </div>
-            <div>
-              <p className="auth-brand-top">Foundation</p>
-              <h2>Unbreakable Ukraine</h2>
-            </div>
-          </div>
+            <div className="auth-heading-card">
+              <div className="auth-brand">
+                <div className="auth-brand-mark" aria-hidden="true">
+                  <svg viewBox="0 0 100 100" role="img">
+                    <polygon points="50,7 82,25 82,62 50,81 18,62 18,25" fill="none" stroke="currentColor" strokeWidth="8" />
+                    <circle cx="50" cy="44" r="12" fill="none" stroke="currentColor" strokeWidth="6" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="auth-brand-top">Foundation</p>
+                  <h2>Unbreakable Ukraine</h2>
+                </div>
+              </div>
 
-          <p className="auth-hero-title">
-            <span className="text-pl">Audyt edukacji i dokumentów szkół</span><br />
-            <span className="text-uk">Аудит освіти та документації шкіл</span>
-          </p>
+              <p className="auth-hero-title">
+                <span className="text-pl">Audyt edukacji i dokumentów szkół</span><br />
+                <span className="text-uk">Аудит освіти та документації шкіл</span>
+              </p>
+            </div>
 
-          <div className="auth-hero-grid">
-            <div className="auth-scene-card scene-school">
-              <span className="scene-beam" aria-hidden="true" />
-              <svg className="scene-illustration" viewBox="0 0 220 120" aria-hidden="true">
-                <path d="M22 56 L110 20 L198 56 L110 90 Z" />
-                <path d="M42 60 L42 104 L178 104 L178 60" />
-                <path d="M110 60 L110 104" />
-                <path d="M82 72 L82 104" />
-                <path d="M138 72 L138 104" />
-                <circle cx="110" cy="44" r="9" />
-              </svg>
-            </div>
-            <div className="auth-scene-card scene-students">
-              <span className="scene-beam" aria-hidden="true" />
-              <svg className="scene-illustration" viewBox="0 0 220 120" aria-hidden="true">
-                <circle cx="112" cy="38" r="13" />
-                <path d="M72 92 Q112 52 152 92" />
-                <path d="M86 34 L112 19 L138 34 L112 46 Z" />
-                <path d="M138 34 L156 46" />
-                <path d="M54 96 L168 96" />
-              </svg>
-            </div>
-            <div className="auth-scene-card scene-online">
-              <span className="scene-beam" aria-hidden="true" />
-              <svg className="scene-illustration" viewBox="0 0 220 120" aria-hidden="true">
-                <rect x="52" y="24" width="116" height="54" rx="7" />
-                <path d="M36 90 L184 90" />
-                <path d="M70 82 L150 82" />
-                <path d="M96 68 L124 68" />
-              </svg>
-            </div>
-            <div className="auth-scene-card scene-subjects">
-              <span className="scene-beam" aria-hidden="true" />
-              <svg className="scene-illustration" viewBox="0 0 220 120" aria-hidden="true">
-                <rect x="62" y="20" width="24" height="76" rx="4" />
-                <rect x="96" y="16" width="24" height="80" rx="4" />
-                <rect x="130" y="24" width="24" height="72" rx="4" />
-                <path d="M56 96 L160 96" />
-              </svg>
-            </div>
-          <div className="auth-art-strip" aria-label="Education themed visual tiles">
-            <div className="art-tile tile-school">
-              <span className="tile-beam" aria-hidden="true" />
-              <span className="edu-illustration" aria-hidden="true">
-                <svg viewBox="0 0 120 80">
-                  <path d="M14 40 L60 20 L106 40 L60 58 Z" />
-                  <path d="M24 42 L24 66 L96 66 L96 42" />
-                  <path d="M60 42 L60 66" />
-                  <path d="M45 50 L45 66" />
-                  <path d="M75 50 L75 66" />
+            <div className="auth-hero-grid" aria-label="Education themed visual grid">
+              <div className="auth-scene-card scene-school">
+                <span className="scene-beam" aria-hidden="true" />
+                <svg className="scene-illustration" viewBox="0 0 220 120" aria-hidden="true">
+                  <path d="M22 56 L110 20 L198 56 L110 90 Z" />
+                  <path d="M42 60 L42 104 L178 104 L178 60" />
+                  <path d="M110 60 L110 104" />
+                  <path d="M82 72 L82 104" />
+                  <path d="M138 72 L138 104" />
+                  <circle cx="110" cy="44" r="9" />
                 </svg>
-              </span>
-            </div>
-            <div className="art-tile tile-student">
-              <span className="tile-beam" aria-hidden="true" />
-              <span className="edu-illustration" aria-hidden="true">
-                <svg viewBox="0 0 120 80">
-                  <circle cx="60" cy="26" r="9" />
-                  <path d="M40 56 Q60 36 80 56" />
-                  <path d="M48 24 L60 15 L72 24 L60 30 Z" />
-                  <path d="M72 24 L82 30" />
+              </div>
+              <div className="auth-scene-card scene-students">
+                <span className="scene-beam" aria-hidden="true" />
+                <svg className="scene-illustration" viewBox="0 0 220 120" aria-hidden="true">
+                  <circle cx="112" cy="38" r="13" />
+                  <path d="M72 92 Q112 52 152 92" />
+                  <path d="M86 34 L112 19 L138 34 L112 46 Z" />
+                  <path d="M138 34 L156 46" />
+                  <path d="M54 96 L168 96" />
                 </svg>
-              </span>
-            </div>
-            <div className="art-tile tile-online">
-              <span className="tile-beam" aria-hidden="true" />
-              <span className="edu-illustration" aria-hidden="true">
-                <svg viewBox="0 0 120 80">
-                  <rect x="30" y="20" width="60" height="30" rx="4" />
-                  <path d="M22 56 L98 56" />
-                  <path d="M52 44 L68 44" />
+              </div>
+              <div className="auth-scene-card scene-online">
+                <span className="scene-beam" aria-hidden="true" />
+                <svg className="scene-illustration" viewBox="0 0 220 120" aria-hidden="true">
+                  <rect x="52" y="24" width="116" height="54" rx="7" />
+                  <path d="M36 90 L184 90" />
+                  <path d="M70 82 L150 82" />
+                  <path d="M96 68 L124 68" />
                 </svg>
-              </span>
-            </div>
-            <div className="art-tile tile-books">
-              <span className="tile-beam" aria-hidden="true" />
-              <span className="edu-illustration" aria-hidden="true">
-                <svg viewBox="0 0 120 80">
-                  <rect x="34" y="20" width="14" height="40" rx="3" />
-                  <rect x="52" y="16" width="14" height="44" rx="3" />
-                  <rect x="70" y="22" width="14" height="38" rx="3" />
+              </div>
+              <div className="auth-scene-card scene-subjects">
+                <span className="scene-beam" aria-hidden="true" />
+                <svg className="scene-illustration" viewBox="0 0 220 120" aria-hidden="true">
+                  <rect x="62" y="20" width="24" height="76" rx="4" />
+                  <rect x="96" y="16" width="24" height="80" rx="4" />
+                  <rect x="130" y="24" width="24" height="72" rx="4" />
+                  <path d="M56 96 L160 96" />
                 </svg>
-              </span>
-            </div>
-            <div className="art-tile tile-lab">
-              <span className="tile-beam" aria-hidden="true" />
-              <span className="edu-illustration" aria-hidden="true">
-                <svg viewBox="0 0 120 80">
-                  <path d="M52 16 L68 16" />
-                  <path d="M58 16 L58 34 L44 58 Q42 62 46 64 L74 64 Q78 62 76 58 L62 34 L62 16" />
-                  <path d="M48 50 Q60 44 72 50" />
+              </div>
+              <div className="auth-scene-card scene-lab">
+                <span className="scene-beam" aria-hidden="true" />
+                <svg className="scene-illustration" viewBox="0 0 220 120" aria-hidden="true">
+                  <path d="M100 24 L120 24" />
+                  <path d="M106 24 L106 52 L88 84 Q86 90 92 94 L128 94 Q134 90 132 84 L114 52 L114 24" />
+                  <path d="M94 74 Q110 66 126 74" />
                 </svg>
-              </span>
+              </div>
+              <div className="auth-scene-card scene-docs">
+                <span className="scene-beam" aria-hidden="true" />
+                <svg className="scene-illustration" viewBox="0 0 220 120" aria-hidden="true">
+                  <rect x="62" y="26" width="66" height="72" rx="6" />
+                  <path d="M78 52 L112 52" />
+                  <path d="M78 64 L112 64" />
+                  <path d="M78 76 L104 76" />
+                  <rect x="118" y="34" width="40" height="54" rx="6" />
+                </svg>
+              </div>
             </div>
-          </div>
+
           </div>
 
           <div className="auth-flag-strip" aria-label="PL-UA collaboration">
@@ -630,7 +573,6 @@ function Auth() {
             <span className="flag-link">↔</span>
             <span className="flag-pill flag-ua">UA</span>
             <span className="flag-note">Wspólny standard edukacyjny / Спільний освітній стандарт</span>
-          </div>
           </div>
         </aside>
 
