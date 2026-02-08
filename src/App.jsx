@@ -537,29 +537,25 @@ function Auth() {
             <div className="privacy-line">
               <span className="privacy-label">Cookie</span>
               <div className="privacy-text">
-                <span className="text-pl">Wyłącznie techniczne cookie do logowania i utrzymania sesji.</span>
                 <span className="text-uk">Лише технічні cookie для входу та підтримки сесії.</span>
               </div>
             </div>
             <div className="privacy-line">
               <span className="privacy-label">Administrator</span>
               <div className="privacy-text">
-                <span className="text-pl">FUNDACJA NIEZNISZCZALNA UKRAINA, NIP: 7812018614.</span>
-                <span className="text-uk">FUNDACJA NIEZNISZCZALNA UKRAINA, NIP: 7812018614.</span>
+                <span className="text-pl">FUNDACJA NIEZNISZCZALNA UKRAINA, NIP: PL7812018614.</span>
               </div>
             </div>
             <div className="privacy-line">
               <span className="privacy-label">Adres / Адреса</span>
               <div className="privacy-text">
-                <span className="text-pl">ul. Swietego Filipa 25, 31-150 Krakow, POLSKA.</span>
-                <span className="text-uk">ul. Swietego Filipa 25, 31-150 Krakow, POLSKA.</span>
+                <span className="text-pl">ul. Swietego Filipa 25, 31-150 Krakow.</span>
               </div>
             </div>
             <div className="privacy-line">
               <span className="privacy-label">Kontakt</span>
               <div className="privacy-text">
-                <span className="text-pl">Dostep/usuniecie danych:</span>
-                <span className="text-uk">Доступ/видалення даних:</span>
+                <span className="text-pl">Dostep/usuniecie danych / Доступ/видалення даних:</span>
                 <a href="mailto:support@taskwheels.com">support@taskwheels.com</a>
               </div>
             </div>
