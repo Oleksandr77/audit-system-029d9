@@ -346,62 +346,73 @@ body {
 }
 
 .art-tile {
-  height: 68px;
+  height: 98px;
   border-radius: 12px;
   border: 1px solid rgba(184, 214, 227, 0.36);
   background:
-    linear-gradient(140deg, rgba(8, 41, 55, 0.85), rgba(21, 82, 105, 0.5)),
-    radial-gradient(circle at 25% 10%, rgba(215, 195, 99, 0.3), transparent 52%);
+    linear-gradient(145deg, rgba(8, 41, 55, 0.88), rgba(15, 67, 88, 0.56)),
+    radial-gradient(circle at 25% 10%, rgba(214, 194, 97, 0.23), transparent 48%);
   position: relative;
   overflow: hidden;
+  padding: 0.5rem 0.5rem 0.45rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
 }
 
-.art-tile::before,
-.art-tile::after {
-  content: '';
+.tile-beam {
   position: absolute;
-  background: linear-gradient(120deg, rgba(255, 255, 255, 0), rgba(187, 223, 235, 0.55), rgba(255, 255, 255, 0));
+  left: -24%;
+  top: 30%;
+  width: 160%;
+  height: 18px;
   transform: rotate(-28deg);
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(193, 225, 236, 0.72), rgba(255, 255, 255, 0));
+  opacity: 0.58;
 }
 
-.art-tile::before {
-  width: 120%;
-  height: 22px;
-  top: 38%;
-  left: -10%;
-}
-
-.art-tile::after {
-  width: 70%;
-  height: 14px;
-  top: 60%;
-  left: 6%;
-  opacity: 0.6;
-}
-
-.art-tile span {
+.edu-glyph {
   position: absolute;
-  inset: 0;
+  left: 50%;
+  top: 34%;
+  width: 54px;
+  height: 32px;
+  transform: translate(-50%, -50%);
 }
 
-.art-tile span::before,
-.art-tile span::after {
+.edu-glyph::before,
+.edu-glyph::after {
   content: '';
   position: absolute;
-  border: 2px solid rgba(233, 245, 251, 0.8);
+  border: 2px solid rgba(232, 247, 252, 0.84);
   border-radius: 999px;
 }
 
-.tile-1 span::before { width: 30px; height: 14px; left: 22%; top: 48%; transform: rotate(-20deg); }
-.tile-1 span::after { width: 14px; height: 14px; left: 46%; top: 41%; }
-.tile-2 span::before { width: 14px; height: 36px; left: 45%; top: 24%; border-radius: 10px; }
-.tile-2 span::after { width: 36px; height: 14px; left: 34%; top: 55%; border-radius: 10px; }
-.tile-3 span::before { width: 34px; height: 16px; left: 30%; top: 50%; transform: rotate(18deg); }
-.tile-3 span::after { width: 18px; height: 18px; left: 56%; top: 36%; }
-.tile-4 span::before { width: 16px; height: 36px; left: 40%; top: 28%; border-radius: 9px; transform: rotate(-16deg); }
-.tile-4 span::after { width: 34px; height: 14px; left: 36%; top: 58%; }
-.tile-5 span::before { width: 30px; height: 14px; left: 28%; top: 50%; transform: rotate(-26deg); }
-.tile-5 span::after { width: 16px; height: 16px; left: 55%; top: 40%; }
+.glyph-school::before { width: 30px; height: 14px; left: 6px; top: 8px; transform: rotate(-17deg); }
+.glyph-school::after { width: 16px; height: 16px; left: 30px; top: 2px; }
+
+.glyph-student::before { width: 14px; height: 30px; left: 20px; top: 0; border-radius: 8px; }
+.glyph-student::after { width: 34px; height: 13px; left: 10px; top: 17px; border-radius: 8px; transform: rotate(-8deg); }
+
+.glyph-laptop::before { width: 31px; height: 14px; left: 8px; top: 8px; border-radius: 6px; transform: rotate(13deg); }
+.glyph-laptop::after { width: 38px; height: 11px; left: 6px; top: 20px; border-radius: 8px; }
+
+.glyph-books::before { width: 16px; height: 34px; left: 14px; top: -2px; border-radius: 9px; transform: rotate(-14deg); }
+.glyph-books::after { width: 34px; height: 14px; left: 12px; top: 16px; border-radius: 9px; }
+
+.glyph-lab::before { width: 26px; height: 12px; left: 10px; top: 8px; transform: rotate(-22deg); }
+.glyph-lab::after { width: 15px; height: 15px; left: 31px; top: 2px; }
+
+.art-tile p {
+  margin: 0;
+  position: relative;
+  z-index: 2;
+  font-size: 0.66rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: #cbe5ef;
+}
 
 .auth-flag-strip {
   margin-top: 1rem;

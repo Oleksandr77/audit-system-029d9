@@ -520,12 +520,32 @@ function Auth() {
             </div>
           </div>
 
-          <div className="auth-art-strip" aria-hidden="true">
-            <div className="art-tile tile-1"><span /></div>
-            <div className="art-tile tile-2"><span /></div>
-            <div className="art-tile tile-3"><span /></div>
-            <div className="art-tile tile-4"><span /></div>
-            <div className="art-tile tile-5"><span /></div>
+          <div className="auth-art-strip" aria-label="Education themed visual tiles">
+            <div className="art-tile tile-school">
+              <span className="tile-beam" aria-hidden="true" />
+              <span className="edu-glyph glyph-school" aria-hidden="true" />
+              <p>Szkoly / Школи</p>
+            </div>
+            <div className="art-tile tile-student">
+              <span className="tile-beam" aria-hidden="true" />
+              <span className="edu-glyph glyph-student" aria-hidden="true" />
+              <p>Uczniowie / Учні</p>
+            </div>
+            <div className="art-tile tile-online">
+              <span className="tile-beam" aria-hidden="true" />
+              <span className="edu-glyph glyph-laptop" aria-hidden="true" />
+              <p>Platformy / Платформи</p>
+            </div>
+            <div className="art-tile tile-books">
+              <span className="tile-beam" aria-hidden="true" />
+              <span className="edu-glyph glyph-books" aria-hidden="true" />
+              <p>Przedmioty / Предмети</p>
+            </div>
+            <div className="art-tile tile-lab">
+              <span className="tile-beam" aria-hidden="true" />
+              <span className="edu-glyph glyph-lab" aria-hidden="true" />
+              <p>Nauka / Наука</p>
+            </div>
           </div>
 
           <div className="auth-flag-strip" aria-label="PL-UA collaboration">
