@@ -532,6 +532,23 @@ function Auth() {
             {error && <div className="error" role="alert">{error}</div>}
             <button type="submit" disabled={loading}>{loading ? '...' : 'Zaloguj / Увійти'}</button>
           </form>
+          <div className="auth-privacy-note" role="note" aria-label="Privacy notice">
+            <p className="note-title">Privacy notice / Повідомлення про конфіденційність</p>
+            <p>
+              <span className="text-pl">Serwis używa wyłącznie technicznych plików cookie niezbędnych do logowania i utrzymania sesji.</span><br />
+              <span className="text-uk">Сайт використовує лише технічні cookie, необхідні для входу та підтримки сесії.</span>
+            </p>
+            <p>
+              <span className="text-pl">Administrator danych: FUNDACJA NIEZNISZCZALNA UKRAINA, NIP: 7812018614, ul. Świętego Filipa 25, 31-150 Krakow, POLSKA.</span><br />
+              <span className="text-uk">Адміністратор даних: FUNDACJA NIEZNISZCZALNA UKRAINA, NIP: 7812018614, ul. Świętego Filipa 25, 31-150 Krakow, POLSKA.</span>
+            </p>
+            <p>
+              <span className="text-pl">Kontakt ws. dostępu/usunięcia danych:</span>{' '}
+              <a href="mailto:support@taskwheels.com">support@taskwheels.com</a><br />
+              <span className="text-uk">Контакт щодо доступу/видалення даних:</span>{' '}
+              <a href="mailto:support@taskwheels.com">support@taskwheels.com</a>
+            </p>
+          </div>
         </section>
       </div>
     </div>

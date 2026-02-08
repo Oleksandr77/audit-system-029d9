@@ -352,6 +352,36 @@ body {
 .auth-box button:disabled { opacity: 0.7; cursor: not-allowed; }
 .auth-box .error { color: var(--danger); font-size: 0.875rem; margin-top: 0.5rem; }
 
+.auth-privacy-note {
+  margin-top: 1rem;
+  padding-top: 0.95rem;
+  border-top: 1px solid #d9e1e6;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  color: #50606d;
+}
+
+.auth-privacy-note .note-title {
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: #204252;
+  margin-bottom: 0.42rem;
+}
+
+.auth-privacy-note p + p {
+  margin-top: 0.5rem;
+}
+
+.auth-privacy-note a {
+  color: var(--primary-dark);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.auth-privacy-note a:hover {
+  text-decoration: underline;
+}
+
 @media (max-width: 1080px) {
   .auth-shell {
     grid-template-columns: 1fr;
