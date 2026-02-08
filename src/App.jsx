@@ -479,6 +479,37 @@ function Auth() {
       </div>
       <div className="auth-shell">
         <aside className="auth-hero" aria-label="FNU education visual">
+          <div className="auth-premium-canvas" aria-hidden="true">
+            <div className="premium-panel panel-a" />
+            <div className="premium-panel panel-b" />
+            <div className="premium-panel panel-c" />
+
+            <svg className="premium-edu edu-a" viewBox="0 0 340 220">
+              <path d="M58 108 L170 64 L282 108 L170 154 Z" />
+              <path d="M86 112 L86 182 L254 182 L254 112" />
+              <path d="M170 112 L170 182" />
+              <path d="M130 126 L130 182" />
+              <path d="M210 126 L210 182" />
+              <circle cx="170" cy="94" r="12" />
+            </svg>
+
+            <svg className="premium-edu edu-b" viewBox="0 0 340 220">
+              <circle cx="168" cy="72" r="22" />
+              <path d="M106 166 Q168 102 230 166" />
+              <path d="M124 66 L168 42 L212 66 L168 86 Z" />
+              <path d="M212 66 L246 86" />
+              <path d="M84 172 L252 172" />
+            </svg>
+
+            <svg className="premium-edu edu-c" viewBox="0 0 340 220">
+              <rect x="86" y="54" width="168" height="78" rx="10" />
+              <path d="M64 156 L276 156" />
+              <path d="M108 144 L232 144" />
+              <path d="M148 120 L192 120" />
+            </svg>
+          </div>
+
+          <div className="auth-hero-content">
           <div className="auth-brand">
             <div className="auth-brand-mark" aria-hidden="true">
               <svg viewBox="0 0 100 100" role="img">
@@ -537,8 +568,6 @@ function Auth() {
                 <path d="M56 96 L160 96" />
               </svg>
             </div>
-          </div>
-
           <div className="auth-art-strip" aria-label="Education themed visual tiles">
             <div className="art-tile tile-school">
               <span className="tile-beam" aria-hidden="true" />
@@ -594,12 +623,14 @@ function Auth() {
               </span>
             </div>
           </div>
+          </div>
 
           <div className="auth-flag-strip" aria-label="PL-UA collaboration">
             <span className="flag-pill flag-pl">PL</span>
             <span className="flag-link">↔</span>
             <span className="flag-pill flag-ua">UA</span>
             <span className="flag-note">Wspólny standard edukacyjny / Спільний освітній стандарт</span>
+          </div>
           </div>
         </aside>
 
