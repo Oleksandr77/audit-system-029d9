@@ -534,20 +534,35 @@ function Auth() {
           </form>
           <div className="auth-privacy-note" role="note" aria-label="Privacy notice">
             <p className="note-title">Privacy notice / Повідомлення про конфіденційність</p>
-            <p>
-              <span className="text-pl">Serwis używa wyłącznie technicznych plików cookie niezbędnych do logowania i utrzymania sesji.</span><br />
-              <span className="text-uk">Сайт використовує лише технічні cookie, необхідні для входу та підтримки сесії.</span>
-            </p>
-            <p>
-              <span className="text-pl">Administrator danych: FUNDACJA NIEZNISZCZALNA UKRAINA, NIP: 7812018614, ul. Świętego Filipa 25, 31-150 Krakow, POLSKA.</span><br />
-              <span className="text-uk">Адміністратор даних: FUNDACJA NIEZNISZCZALNA UKRAINA, NIP: 7812018614, ul. Świętego Filipa 25, 31-150 Krakow, POLSKA.</span>
-            </p>
-            <p>
-              <span className="text-pl">Kontakt ws. dostępu/usunięcia danych:</span>{' '}
-              <a href="mailto:support@taskwheels.com">support@taskwheels.com</a><br />
-              <span className="text-uk">Контакт щодо доступу/видалення даних:</span>{' '}
-              <a href="mailto:support@taskwheels.com">support@taskwheels.com</a>
-            </p>
+            <div className="privacy-line">
+              <span className="privacy-label">Cookie</span>
+              <div className="privacy-text">
+                <span className="text-pl">Wyłącznie techniczne cookie do logowania i utrzymania sesji.</span>
+                <span className="text-uk">Лише технічні cookie для входу та підтримки сесії.</span>
+              </div>
+            </div>
+            <div className="privacy-line">
+              <span className="privacy-label">Administrator</span>
+              <div className="privacy-text">
+                <span className="text-pl">FUNDACJA NIEZNISZCZALNA UKRAINA, NIP: 7812018614.</span>
+                <span className="text-uk">FUNDACJA NIEZNISZCZALNA UKRAINA, NIP: 7812018614.</span>
+              </div>
+            </div>
+            <div className="privacy-line">
+              <span className="privacy-label">Adres / Адреса</span>
+              <div className="privacy-text">
+                <span className="text-pl">ul. Swietego Filipa 25, 31-150 Krakow, POLSKA.</span>
+                <span className="text-uk">ul. Swietego Filipa 25, 31-150 Krakow, POLSKA.</span>
+              </div>
+            </div>
+            <div className="privacy-line">
+              <span className="privacy-label">Kontakt</span>
+              <div className="privacy-text">
+                <span className="text-pl">Dostep/usuniecie danych:</span>
+                <span className="text-uk">Доступ/видалення даних:</span>
+                <a href="mailto:support@taskwheels.com">support@taskwheels.com</a>
+              </div>
+            </div>
           </div>
         </section>
       </div>

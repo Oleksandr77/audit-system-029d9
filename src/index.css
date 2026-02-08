@@ -354,31 +354,71 @@ body {
 
 .auth-privacy-note {
   margin-top: 1rem;
-  padding-top: 0.95rem;
-  border-top: 1px solid #d9e1e6;
-  font-size: 0.74rem;
-  line-height: 1.45;
-  color: #50606d;
+  padding: 0.85rem 0.9rem;
+  border: 1px solid #dbe3e8;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fbfdfe, #f5f9fb);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: #42525e;
+  font-family: 'Montserrat', 'Manrope', 'Segoe UI', sans-serif;
 }
 
 .auth-privacy-note .note-title {
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   font-weight: 800;
-  color: #204252;
-  margin-bottom: 0.42rem;
+  color: #173848;
+  letter-spacing: 0.01em;
+  margin-bottom: 0.55rem;
 }
 
-.auth-privacy-note p + p {
-  margin-top: 0.5rem;
+.privacy-line {
+  display: grid;
+  grid-template-columns: 126px 1fr;
+  gap: 0.5rem;
+  padding: 0.4rem 0;
+  border-top: 1px dashed #e2e9ed;
 }
 
-.auth-privacy-note a {
+.privacy-line:first-of-type {
+  border-top: none;
+}
+
+.privacy-label {
+  font-weight: 700;
+  color: #214253;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.privacy-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.privacy-text .text-pl {
+  font-size: 0.78rem;
+  color: #253947;
+  font-weight: 600;
+}
+
+.privacy-text .text-uk {
+  font-size: 0.74rem;
+  color: #5b6d79;
+}
+
+.privacy-text a {
+  margin-top: 0.18rem;
+  width: fit-content;
   color: var(--primary-dark);
   font-weight: 700;
   text-decoration: none;
+  font-size: 0.79rem;
 }
 
-.auth-privacy-note a:hover {
+.privacy-text a:hover {
   text-decoration: underline;
 }
 
@@ -417,6 +457,11 @@ body {
 
   .auth-box {
     padding: 1.4rem 1rem;
+  }
+
+  .privacy-line {
+    grid-template-columns: 1fr;
+    gap: 0.2rem;
   }
 }
 
