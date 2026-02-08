@@ -468,6 +468,15 @@ function Auth() {
 
   return (
     <div className="auth-container">
+      <div className="auth-stage-decor" aria-hidden="true">
+        <span className="glow g1" />
+        <span className="glow g2" />
+        <span className="glow g3" />
+        <span className="beam b1" />
+        <span className="beam b2" />
+        <span className="beam b3" />
+        <span className="grain" />
+      </div>
       <div className="auth-shell">
         <aside className="auth-hero" aria-label="FNU education visual">
           <div className="auth-brand">
@@ -509,6 +518,14 @@ function Auth() {
               <strong>Przedmioty / Предмети</strong>
               <span>Matematyka, języki, nauki</span>
             </div>
+          </div>
+
+          <div className="auth-art-strip" aria-hidden="true">
+            <div className="art-tile tile-1"><span /></div>
+            <div className="art-tile tile-2"><span /></div>
+            <div className="art-tile tile-3"><span /></div>
+            <div className="art-tile tile-4"><span /></div>
+            <div className="art-tile tile-5"><span /></div>
           </div>
 
           <div className="auth-flag-strip" aria-label="PL-UA collaboration">
