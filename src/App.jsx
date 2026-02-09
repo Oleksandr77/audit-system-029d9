@@ -454,7 +454,6 @@ function Auth() {
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [authTheme, setAuthTheme] = useState('elegant')
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -468,7 +467,7 @@ function Auth() {
   }
 
   return (
-    <div className={`auth-container auth-theme-${authTheme}`}>
+    <div className="auth-container">
       <div className="auth-stage-decor" aria-hidden="true">
         <span className="glow g1" />
         <span className="glow g2" />
@@ -585,10 +584,6 @@ function Auth() {
 
         <section className="auth-box">
           <p className="auth-kicker">Audit System</p>
-          <div className="auth-theme-switch" role="group" aria-label="Visual theme">
-            <button type="button" className={authTheme === 'elegant' ? 'active' : ''} onClick={() => setAuthTheme('elegant')}>Elegant</button>
-            <button type="button" className={authTheme === 'bold' ? 'active' : ''} onClick={() => setAuthTheme('bold')}>Bold</button>
-          </div>
           <h1>Logowanie / Вхід</h1>
           <p className="auth-subtitle">
             <span className="text-pl">System zarządzania dokumentami audytu</span><br />
@@ -601,11 +596,11 @@ function Auth() {
             <button type="submit" disabled={loading}>{loading ? '...' : 'Zaloguj / Увійти'}</button>
           </form>
           <div className="auth-privacy-note auth-privacy-desktop" role="note" aria-label="Privacy notice">
-            <p className="note-title">Privacy notice / Повідомлення про конфіденційність</p>
+            <p className="note-title">Informacja o prywatnosci</p>
             <div className="privacy-line">
               <span className="privacy-label">🍪</span>
               <div className="privacy-text">
-                <span className="text-uk">Лише технічні cookie для входу та підтримки сесії.</span>
+                <span className="text-pl">Tylko techniczne pliki cookie do logowania i utrzymania sesji.</span>
               </div>
             </div>
             <div className="privacy-line">
@@ -623,19 +618,19 @@ function Auth() {
             <div className="privacy-line">
               <span className="privacy-label">✉️</span>
               <div className="privacy-text">
-                <span className="text-pl">Dostep/usuniecie danych / Доступ/видалення даних:</span>
+                <span className="text-pl">Dostep/usuniecie danych:</span>
                 <a href="mailto:support@taskwheels.com">support@taskwheels.com</a>
               </div>
             </div>
           </div>
 
           <details className="auth-privacy-mobile">
-            <summary>Privacy notice / Повідомлення про конфіденційність</summary>
+            <summary>Informacja o prywatnosci</summary>
             <div className="auth-privacy-note" role="note" aria-label="Privacy notice">
               <div className="privacy-line">
                 <span className="privacy-label">🍪</span>
                 <div className="privacy-text">
-                  <span className="text-uk">Лише технічні cookie для входу та підтримки сесії.</span>
+                  <span className="text-pl">Tylko techniczne pliki cookie do logowania i utrzymania sesji.</span>
                 </div>
               </div>
               <div className="privacy-line">
@@ -653,7 +648,7 @@ function Auth() {
               <div className="privacy-line">
                 <span className="privacy-label">✉️</span>
                 <div className="privacy-text">
-                  <span className="text-pl">Dostep/usuniecie danych / Доступ/видалення даних:</span>
+                  <span className="text-pl">Dostep/usuniecie danych:</span>
                   <a href="mailto:support@taskwheels.com">support@taskwheels.com</a>
                 </div>
               </div>

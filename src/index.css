@@ -532,7 +532,7 @@ body {
   background: rgba(255, 255, 255, 0.96);
   padding: 2.4rem 2rem;
   width: 100%;
-  text-align: left;
+  text-align: center;
 }
 
 .auth-kicker {
@@ -542,32 +542,6 @@ body {
   font-weight: 800;
   letter-spacing: 0.16em;
   margin-bottom: 0.5rem;
-}
-
-.auth-theme-switch {
-  display: inline-flex;
-  gap: 0.25rem;
-  margin-bottom: 0.6rem;
-  background: #f2f6f8;
-  border: 1px solid #d8e0e5;
-  border-radius: 999px;
-  padding: 0.2rem;
-}
-
-.auth-theme-switch button {
-  border: none;
-  background: transparent;
-  color: #58707d;
-  padding: 0.2rem 0.65rem;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.auth-theme-switch button.active {
-  background: #173d4e;
-  color: #eef7fb;
 }
 
 .auth-box h1 {
@@ -623,6 +597,7 @@ body {
   line-height: 1.52;
   color: #42525e;
   font-family: 'Montserrat', 'Manrope', 'Segoe UI', sans-serif;
+  text-align: center;
 }
 
 .auth-privacy-note .note-title {
@@ -634,9 +609,10 @@ body {
 }
 
 .privacy-line {
-  display: grid;
-  grid-template-columns: 36px 1fr;
-  gap: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.38rem;
   padding: 0.4rem 0;
   border-top: 1px solid #e8eef2;
 }
@@ -652,14 +628,15 @@ body {
   line-height: 1;
   text-transform: none;
   letter-spacing: 0;
-  align-self: start;
-  margin-top: 0.12rem;
+  align-self: center;
+  margin-top: 0;
 }
 
 .privacy-text {
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
+  align-items: center;
 }
 
 .privacy-text .text-pl {
@@ -675,7 +652,7 @@ body {
 
 .privacy-text a {
   margin-top: 0.18rem;
-  width: fit-content;
+  width: auto;
   color: var(--primary-dark);
   font-weight: 700;
   text-decoration: none;
@@ -711,21 +688,6 @@ body {
   border: none;
   border-top: 1px solid #e5edf1;
   border-radius: 0 0 10px 10px;
-}
-
-.auth-container.auth-theme-bold {
-  background:
-    radial-gradient(circle at 9% 8%, rgba(255, 122, 89, 0.22), transparent 38%),
-    radial-gradient(circle at 85% 85%, rgba(250, 224, 189, 0.18), transparent 36%),
-    linear-gradient(136deg, #082232 0%, #0f4055 44%, #e17157 100%);
-}
-
-.auth-container.auth-theme-bold .auth-stage-decor .beam {
-  opacity: 0.19;
-}
-
-.auth-container.auth-theme-bold .auth-stage-decor .grain {
-  opacity: 0.07;
 }
 
 @media (max-width: 1080px) {
