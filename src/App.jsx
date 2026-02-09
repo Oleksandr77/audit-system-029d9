@@ -9,12 +9,52 @@ const ROLES = {
   lawyer_admin: { pl: 'Prawnik Admin', uk: 'Юрист Адмін' },
   lawyer_auditor: { pl: 'Prawnik Audytor', uk: 'Юрист Аудитор' },
   user_fnu: { pl: 'Użytkownik FNU', uk: 'Користувач FNU' },
-  user_operator: { pl: 'Użytkownik OPERATOR', uk: 'Користувач OPERATOR' }
+  user_operator: { pl: 'Użytkownik AUDITOR', uk: 'Користувач AUDITOR' }
 }
 
+// Canonical side name is AUDITOR. OPERATOR is legacy (kept for backward compatibility with old DB rows).
+const SIDE_FNU = 'FNU'
+const SIDE_AUDITOR = 'AUDITOR'
+const SIDE_OPERATOR_LEGACY = 'OPERATOR'
+
 const SIDES = {
-  FNU: { pl: 'FNU (Strona dostarczająca)', uk: 'FNU (Сторона що надає)' },
-  OPERATOR: { pl: 'OPERATOR (Strona audytu)', uk: 'OPERATOR (Сторона аудиту)' }
+  [SIDE_FNU]: { pl: 'FNU (Strona dostarczająca)', uk: 'FNU (Сторона що надає)' },
+  [SIDE_AUDITOR]: { pl: 'AUDITOR (Strona audytu)', uk: 'AUDITOR (Сторона аудиту)' }
+}
+
+function normalizeSide(side) {
+  const s = String(side || '').trim().toUpperCase()
+  if (s === SIDE_OPERATOR_LEGACY) return SIDE_AUDITOR
+  if (s === SIDE_FNU) return SIDE_FNU
+  if (s === SIDE_AUDITOR) return SIDE_AUDITOR
+  return s || SIDE_FNU
+}
+
+function isAuditorSide(side) {
+  return normalizeSide(side) === SIDE_AUDITOR
+}
+
+function formatSideLabel(side) {
+  const s = normalizeSide(side)
+  return s === SIDE_AUDITOR ? SIDE_AUDITOR : SIDE_FNU
+}
+
+function sideClass(side) {
+  const s = normalizeSide(side)
+  return s === SIDE_AUDITOR ? 'auditor' : 'fnu'
+}
+
+function visibleSidesHasAuditor(visibleToSides) {
+  const list = Array.isArray(visibleToSides) ? visibleToSides : []
+  return list.some(s => normalizeSide(s) === SIDE_AUDITOR)
+}
+
+function canSeeBySide(visibleToSides, viewerSide) {
+  const viewer = normalizeSide(viewerSide)
+  const list = Array.isArray(visibleToSides) ? visibleToSides : []
+  if (list.length === 0) return true
+  if (viewer === SIDE_FNU) return list.some(s => normalizeSide(s) === SIDE_FNU)
+  return list.some(s => normalizeSide(s) === SIDE_AUDITOR)
 }
 
 const STATUS_OPTIONS = [
@@ -33,7 +73,7 @@ const RATE_LIMIT_MS = 1000
 const USERS_PAGE_SIZE = 20
 
 const LANGUAGE_MODES = ['auto', 'pl', 'uk']
-const SIDE_DEFAULT_LANGUAGE = { FNU: 'uk', OPERATOR: 'pl' }
+const SIDE_DEFAULT_LANGUAGE = { [SIDE_FNU]: 'uk', [SIDE_AUDITOR]: 'pl', [SIDE_OPERATOR_LEGACY]: 'pl' }
 const TRANSLATION_TIMEOUT_MS = 6000
 const LLM_MAX_RETRIES = 3
 const TRANSLATE_CACHE_TTL_MS = 30 * 60 * 1000
@@ -703,7 +743,7 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
     const baseQuery = supabase.from('document_files').select('*').eq('document_id', document.id)
     let query = baseQuery.order('created_at')
 
-    if (profile?.side === 'OPERATOR') {
+    if (isAuditorSide(profile?.side)) {
       const { data: accessData } = await supabase
         .from('document_access')
         .select('file_id')
@@ -884,7 +924,7 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
 
           await logAudit(profile.id, 'upload_file', 'document_file', document.id, { file_name: file.name })
 
-          if (profile.side === 'FNU' && fileData) {
+          if (normalizeSide(profile.side) === SIDE_FNU && fileData) {
             await supabase.from('document_access').insert({
               document_id: document.id,
               file_id: fileData.id,
@@ -976,7 +1016,7 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
       const { data: operators } = await supabase
         .from('profiles')
         .select('id')
-        .eq('side', 'OPERATOR')
+        .in('side', [SIDE_AUDITOR, SIDE_OPERATOR_LEGACY])
         .eq('is_active', true)
 
       if (operators && operators.length > 0) {
@@ -991,7 +1031,7 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
         await supabase.from('notifications').insert(notifications)
       }
 
-      addToast('Opublikowano dla OPERATOR / Опубліковано для OPERATOR', 'success')
+      addToast('Opublikowano dla AUDITOR / Опубліковано для AUDITOR', 'success')
       loadFiles()
     } catch (err) {
       addToast('Błąd publikacji / Помилка публікації', 'error')
@@ -1159,8 +1199,8 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
                 </button>
                 <button onClick={() => handleDownload(file.file_path, file.file_name)} aria-label="Pobierz / Завантажити">⬇️</button>
                 {canDelete && <button onClick={() => handleDelete(file.id, file.file_path)} aria-label="Usuń / Видалити">🗑️</button>}
-                {profile?.side === 'FNU' && profile?.role === 'super_admin' && (
-                  <button onClick={() => publishToOperator(file.id)} aria-label="Opublikuj dla OPERATOR" className="btn-publish">📤</button>
+                {normalizeSide(profile?.side) === SIDE_FNU && profile?.role === 'super_admin' && (
+                  <button onClick={() => publishToOperator(file.id)} aria-label="Opublikuj dla AUDITOR" className="btn-publish">📤</button>
                 )}
               </div>
               {expandedVersionFileId === file.id && (
@@ -1266,7 +1306,7 @@ const CommentItem = ({ comment, depth, maxDepth, onReply, onToggleVisibility, ca
       <div className="comment-header">
         <span className="comment-author">
           <SafeText>{comment.author?.full_name || comment.author?.email}</SafeText>
-          <span className={`side-badge ${comment.author?.side?.toLowerCase()}`}>{comment.author?.side}</span>
+          <span className={`side-badge ${sideClass(comment.author?.side)}`}>{formatSideLabel(comment.author?.side)}</span>
         </span>
         <time dateTime={comment.created_at}>{new Date(comment.created_at).toLocaleString()}</time>
       </div>
@@ -1277,7 +1317,7 @@ const CommentItem = ({ comment, depth, maxDepth, onReply, onToggleVisibility, ca
         )}
         {canToggle && (
           <button onClick={() => onToggleVisibility(comment.id, comment.visible_to_sides || [])}>
-            {(comment.visible_to_sides || []).includes('OPERATOR') ? '🔓 OPERATOR' : '🔒 FNU'}
+            {visibleSidesHasAuditor(comment.visible_to_sides) ? '🔓 AUDITOR' : '🔒 FNU'}
           </button>
         )}
       </div>
@@ -1310,7 +1350,7 @@ function Comments({ document, canComment, canView, displayLanguage }) {
     const filtered = (data || []).filter(c => {
       if (profile?.role === 'super_admin') return true
       if (!c.visible_to_sides) return true
-      return c.visible_to_sides.includes(profile?.side)
+      return canSeeBySide(c.visible_to_sides, profile?.side)
     })
     safeSetState(setComments)(filtered)
   }, [document?.id, profile, safeSetState])
@@ -1337,7 +1377,7 @@ function Comments({ document, canComment, canView, displayLanguage }) {
       translated_uk: translatedUk,
       translation_provider: 'smart-api',
       parent_comment_id: replyTo,
-      visible_to_sides: profile.side === 'FNU' ? ['FNU'] : ['FNU', 'OPERATOR']
+      visible_to_sides: normalizeSide(profile.side) === SIDE_FNU ? [SIDE_FNU] : [SIDE_FNU, SIDE_AUDITOR]
     }).select().single()
 
     if (!error && data) {
@@ -1351,7 +1391,7 @@ function Comments({ document, canComment, canView, displayLanguage }) {
   }
 
   const toggleVisibility = async (commentId, currentSides) => {
-    const newSides = currentSides.includes('OPERATOR') ? ['FNU'] : ['FNU', 'OPERATOR']
+    const newSides = visibleSidesHasAuditor(currentSides) ? [SIDE_FNU] : [SIDE_FNU, SIDE_AUDITOR]
     await supabase.from('comments').update({ visible_to_sides: newSides }).eq('id', commentId)
     loadComments()
     addToast('Widoczność zmieniona / Видимість змінено', 'success')
@@ -1965,7 +2005,7 @@ function Chat({
               <div key={u.id} className={`chat-user ${selectedDirectUserId === u.id ? 'active' : ''}`}>
                 <button type="button" className="chat-user-main" onClick={() => selectDirectUser(u.id)} role="option" aria-selected={selectedDirectUserId === u.id}>
                   <span className="user-name"><SafeText>{u.full_name || u.email}</SafeText></span>
-                  <span className={`side-badge ${u.side?.toLowerCase()}`}>{u.side}</span>
+                  <span className={`side-badge ${sideClass(u.side)}`}>{formatSideLabel(u.side)}</span>
                 </button>
                 <label className="chat-user-select">
                   <input
@@ -1996,7 +2036,7 @@ function Chat({
                     <div key={m.id} className={`message ${m.sender_id === profile?.id ? 'sent' : 'received'}`}>
                       <div className="message-header">
                         <span className="message-sender"><SafeText>{m.sender?.full_name || m.sender?.email}</SafeText></span>
-                        <span className={`side-badge ${m.sender?.side?.toLowerCase()}`}>{m.sender?.side}</span>
+                        <span className={`side-badge ${sideClass(m.sender?.side)}`}>{formatSideLabel(m.sender?.side)}</span>
                       </div>
                       {rawCtx?.topic && <span className="message-context-chip"><SafeText>{rawCtx.topic}</SafeText></span>}
                       <p className="message-content"><SafeText>{parsed.text}</SafeText></p>
@@ -2125,7 +2165,8 @@ function UserManagement({ onClose }) {
       if (error) throw error
 
       if (data.user) {
-        await supabase.from('profiles').upsert({
+        const requestedSide = normalizeSide(newUser.side)
+        const upsertResult = await supabase.from('profiles').upsert({
           id: data.user.id,
           email: newUser.email,
           full_name: sanitizeText(newUser.full_name),
@@ -2133,13 +2174,27 @@ function UserManagement({ onClose }) {
           position: sanitizeText(newUser.position),
           company_name: sanitizeText(newUser.company_name),
           role: newUser.role,
-          side: newUser.side,
+          side: requestedSide,
           is_active: true
         })
+        // If DB still expects legacy side value, retry once.
+        if (upsertResult.error && requestedSide === SIDE_AUDITOR) {
+          await supabase.from('profiles').upsert({
+            id: data.user.id,
+            email: newUser.email,
+            full_name: sanitizeText(newUser.full_name),
+            phone: sanitizeText(newUser.phone),
+            position: sanitizeText(newUser.position),
+            company_name: sanitizeText(newUser.company_name),
+            role: newUser.role,
+            side: SIDE_OPERATOR_LEGACY,
+            is_active: true
+          })
+        }
         await logAudit(profile.id, 'create_user', 'profile', data.user.id)
       }
 
-      setNewUser({ email: '', password: '', full_name: '', phone: '', position: '', company_name: '', role: 'user_fnu', side: 'FNU' })
+      setNewUser({ email: '', password: '', full_name: '', phone: '', position: '', company_name: '', role: 'user_fnu', side: SIDE_FNU })
 
       const { data: usersData } = await supabase.from('profiles').select('*').order('created_at', { ascending: false })
       safeSetState(setUsers)(usersData || [])
@@ -2150,8 +2205,21 @@ function UserManagement({ onClose }) {
   }
 
   const updateUser = async (userId, updates) => {
-    await supabase.from('profiles').update(updates).eq('id', userId)
-    await logAudit(profile.id, 'update_user', 'profile', userId, updates)
+    const next = { ...updates }
+    if (next.side) next.side = normalizeSide(next.side)
+
+    let { error } = await supabase.from('profiles').update(next).eq('id', userId)
+    // Backward-compat for legacy DB values.
+    if (error && next.side === SIDE_AUDITOR) {
+      const retry = await supabase.from('profiles').update({ ...next, side: SIDE_OPERATOR_LEGACY }).eq('id', userId)
+      error = retry.error
+    }
+    if (error) {
+      addToast('Błąd: ' + sanitizeText(error.message || 'update_failed'), 'error')
+      return
+    }
+
+    await logAudit(profile.id, 'update_user', 'profile', userId, next)
 
     const { data } = await supabase.from('profiles').select('*').order('created_at', { ascending: false })
     safeSetState(setUsers)(data || [])
@@ -2212,8 +2280,13 @@ function UserManagement({ onClose }) {
                     <td>{u.email}</td>
                     <td>{u.phone || '—'}</td>
                     <td>
-                      <select value={u.side || 'FNU'} onChange={e => updateUser(u.id, { side: e.target.value })} className={`side-select ${u.side?.toLowerCase()}`} aria-label={`Strona dla ${u.email}`}>
-                        {Object.entries(SIDES).map(([k]) => <option key={k} value={k}>{k}</option>)}
+                      <select
+                        value={normalizeSide(u.side) || SIDE_FNU}
+                        onChange={e => updateUser(u.id, { side: e.target.value })}
+                        className={`side-select ${sideClass(u.side)}`}
+                        aria-label={`Strona dla ${u.email}`}
+                      >
+                        {Object.entries(SIDES).map(([k, v]) => <option key={k} value={k}>{v.pl}</option>)}
                       </select>
                     </td>
                     <td>
@@ -2329,7 +2402,7 @@ function AuditLog({ onClose }) {
                     </div>
                     <div className="audit-user">
                       <SafeText>{log.user?.full_name || log.user?.email || 'System'}</SafeText>
-                      {log.user?.side && <span className={`side-badge ${log.user.side.toLowerCase()}`}>{log.user.side}</span>}
+                      {log.user?.side && <span className={`side-badge ${sideClass(log.user.side)}`}>{formatSideLabel(log.user.side)}</span>}
                     </div>
                     {log.details && <pre className="audit-details">{JSON.stringify(log.details, null, 2)}</pre>}
                   </div>
@@ -2897,7 +2970,7 @@ function AppContent() {
           <div className="header-right">
             <div className="user-info">
               <span className="user-name"><SafeText>{profile.full_name || profile.email}</SafeText></span>
-              <span className={`side-badge ${profile.side?.toLowerCase()}`}>{profile.side}</span>
+              <span className={`side-badge ${sideClass(profile.side)}`}>{formatSideLabel(profile.side)}</span>
               <span className="role-badge">{ROLES[profile.role]?.pl}</span>
             </div>
 
@@ -3034,7 +3107,7 @@ function AppContent() {
                     {doc.responsible && (
                       <span className="doc-responsible">
                         <SafeText>{doc.responsible.full_name || doc.responsible.email}</SafeText>
-                        <span className={`side-badge small ${doc.responsible.side?.toLowerCase()}`}>{doc.responsible.side}</span>
+                        <span className={`side-badge small ${sideClass(doc.responsible.side)}`}>{formatSideLabel(doc.responsible.side)}</span>
                       </span>
                     )}
                     <button

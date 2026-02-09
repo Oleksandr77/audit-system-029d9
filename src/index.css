@@ -1,5 +1,5 @@
 /* =====================================================
-   AUDIT SYSTEM v4.1 - Full CSS with FNU/OPERATOR, Chat, Bilingual
+   AUDIT SYSTEM v4.1 - Full CSS with FNU/AUDITOR, Chat, Bilingual
    ===================================================== */
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -11,7 +11,9 @@
   --warning: #d7a600;
   --danger: #df4f4f;
   --fnu-color: #ff7a59;
-  --operator-color: #174454;
+  --auditor-color: #174454;
+  /* Legacy alias (was OPERATOR) */
+  --operator-color: var(--auditor-color);
   --bg: #f4f7f8;
   --bg-strong: #e8eef0;
   --text: #0f1f29;
@@ -62,7 +64,7 @@ body {
 }
 
 /* =====================================================
-   SIDE BADGES (FNU / OPERATOR)
+   SIDE BADGES (FNU / AUDITOR)
    ===================================================== */
 .side-badge {
   display: inline-block;
@@ -80,9 +82,10 @@ body {
   border: 1px solid rgba(255, 122, 89, 0.35);
 }
 
+.side-badge.auditor,
 .side-badge.operator {
   background: rgba(23, 68, 84, 0.14);
-  color: var(--operator-color);
+  color: var(--auditor-color);
   border: 1px solid rgba(23, 68, 84, 0.32);
 }
 
@@ -597,7 +600,7 @@ body {
   line-height: 1.52;
   color: #42525e;
   font-family: 'Montserrat', 'Manrope', 'Segoe UI', sans-serif;
-  text-align: center;
+  text-align: left;
 }
 
 .auth-privacy-note .note-title {
@@ -609,9 +612,9 @@ body {
 }
 
 .privacy-line {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  align-items: start;
   gap: 0.38rem;
   padding: 0.4rem 0;
   border-top: 1px solid #e8eef2;
@@ -628,15 +631,15 @@ body {
   line-height: 1;
   text-transform: none;
   letter-spacing: 0;
-  align-self: center;
-  margin-top: 0;
+  align-self: start;
+  margin-top: 0.1rem;
 }
 
 .privacy-text {
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
-  align-items: center;
+  align-items: flex-start;
 }
 
 .privacy-text .text-pl {
@@ -791,7 +794,7 @@ body {
   }
 
   .privacy-line {
-    grid-template-columns: 1fr;
+    grid-template-columns: 24px 1fr;
     gap: 0.2rem;
   }
 }
@@ -2245,7 +2248,8 @@ body {
 }
 
 .side-select.fnu { border-color: var(--fnu-color); }
-.side-select.operator { border-color: var(--operator-color); }
+.side-select.auditor,
+.side-select.operator { border-color: var(--auditor-color); }
 
 /* =====================================================
    SECTION MANAGER
