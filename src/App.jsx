@@ -108,13 +108,13 @@ const COMMENT_AUTHOR_PALETTE = [
   { bg: '#f8fafc', border: '#cbd5e1', accent: '#334155', textBg: '#e2e8f0', textFg: '#1f2937' },
 ]
 
-const COMMENT_AUTHOR_DIRECTORY = [
-  { name: 'Bartosz Kowalak', title: 'radca prawny', aliases: ['bartosz kowalak'] },
-  { name: 'prof. Grzegorz Wojtkowiak', title: 'doradca finansowy', aliases: ['prof. grzegorz wojtkowiak', 'grzegorz wojtkowiak'] },
-  { name: 'Łukasz Rozmiarek', title: 'radca prawny', aliases: ['łukasz rozmiarek', 'lukasz rozmiarek'] },
-  { name: 'Michalina Koligot', title: 'adwokat', aliases: ['michalina koligot'] },
-  { name: 'Michał Pruski', title: 'radca prawny', aliases: ['michał pruski', 'michal pruski'] },
-  { name: 'Marzena Buchowiecka', title: 'radca prawny', aliases: ['marzena buchowiecka'] },
+const EXPERT_PRESETS = [
+  { full_name: 'Bartosz Kowalak', position: 'radca prawny', side: SIDE_AUDITOR, role: 'lawyer_auditor' },
+  { full_name: 'prof. Grzegorz Wojtkowiak', position: 'doradca finansowy', side: SIDE_AUDITOR, role: 'lawyer_auditor' },
+  { full_name: 'Łukasz Rozmiarek', position: 'radca prawny', side: SIDE_AUDITOR, role: 'lawyer_auditor' },
+  { full_name: 'Michalina Koligot', position: 'adwokat', side: SIDE_AUDITOR, role: 'lawyer_auditor' },
+  { full_name: 'Michał Pruski', position: 'radca prawny', side: SIDE_AUDITOR, role: 'lawyer_auditor' },
+  { full_name: 'Marzena Buchowiecka', position: 'radca prawny', side: SIDE_AUDITOR, role: 'lawyer_auditor' },
 ]
 
 const translateCache = new Map()
@@ -260,41 +260,10 @@ function hashStringToIndex(value, modulo) {
   return Math.abs(hash) % Math.max(1, modulo)
 }
 
-function normalizeAuthorLookup(value) {
-  if (!value || typeof value !== 'string') return ''
-  return value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-zA-Z0-9@.\s]/g, ' ')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-const COMMENT_AUTHOR_DIRECTORY_INDEX = (() => {
-  const index = new Map()
-  for (const item of COMMENT_AUTHOR_DIRECTORY) {
-    const aliases = Array.isArray(item.aliases) ? item.aliases : []
-    const keys = [item.name, ...aliases]
-      .map(normalizeAuthorLookup)
-      .filter(Boolean)
-    for (const key of keys) index.set(key, item)
-  }
-  return index
-})()
-
 function resolveCommentAuthorDisplay(author) {
-  const nameRaw = String(author?.full_name || '')
-  const emailRaw = String(author?.email || '')
-  const keys = [nameRaw, emailRaw].map(normalizeAuthorLookup).filter(Boolean)
-  for (const key of keys) {
-    const hit = COMMENT_AUTHOR_DIRECTORY_INDEX.get(key)
-    if (hit) {
-      return { name: hit.name, title: hit.title }
-    }
-  }
-  const cleanName = sanitizeText(nameRaw)
-  if (cleanName) return { name: cleanName, title: '' }
+  const cleanName = sanitizeText(String(author?.full_name || ''))
+  const cleanTitle = sanitizeText(String(author?.position || ''))
+  if (cleanName) return { name: cleanName, title: cleanTitle }
   return { name: 'Użytkownik', title: '' }
 }
 
@@ -408,6 +377,10 @@ async function invokeFunctionWithSessionRetry(functionName, payload) {
 
 async function invokeGdriveImportWithAuthRetry(payload) {
   return invokeFunctionWithAuthRetry('gdrive-import', payload)
+}
+
+async function invokeUserAccessAdminWithAuthRetry(payload) {
+  return invokeFunctionWithAuthRetry('user-access-admin', payload)
 }
 
 async function invokeLlmTranslatorWithAuthRetry(payload) {
@@ -1637,7 +1610,8 @@ function Comments({ entityType = 'document', entityId, parentDocumentId = null, 
 
   const loadComments = useCallback(async () => {
     if (!entityId) return
-    const selectCols = 'id, author_id, content, source_language, translated_pl, translated_uk, translation_provider, created_at, parent_comment_id, visible_to_sides, comment_scope, author:author_id(full_name, email, side)'
+    const selectCols = 'id, author_id, content, source_language, translated_pl, translated_uk, translation_provider, created_at, parent_comment_id, visible_to_sides, comment_scope, author:author_id(full_name, position, email, side)'
+    const selectColsFallback = 'id, author_id, content, source_language, translated_pl, translated_uk, translation_provider, created_at, parent_comment_id, visible_to_sides, comment_scope, author:author_id(full_name, email, side)'
     let data = []
     let error = null
 
@@ -1648,6 +1622,22 @@ function Comments({ entityType = 'document', entityId, parentDocumentId = null, 
       .order('created_at')
     data = primaryQuery.data || []
     error = primaryQuery.error
+
+    if (error) {
+      const details = `${String(error.message || '')} ${String(error.details || '')}`.toLowerCase()
+      if (/position|column/i.test(details)) {
+        const fallbackQuery = await supabase
+          .from('comments')
+          .select(selectColsFallback)
+          .eq(entityColumn, entityId)
+          .order('created_at')
+        data = (fallbackQuery.data || []).map((row) => ({
+          ...row,
+          author: row?.author ? { ...row.author, position: '' } : row.author
+        }))
+        error = fallbackQuery.error
+      }
+    }
 
     if (error && entityType === 'file' && parentDocumentId) {
       const details = `${String(error.message || '')} ${String(error.details || '')} ${String(error.hint || '')}`.toLowerCase()
@@ -2789,8 +2779,25 @@ function UserManagement({ onClose }) {
   const [invites, setInvites] = useState([])
   const [loading, setLoading] = useState(true)
   const [loadingInvites, setLoadingInvites] = useState(false)
-  const [newUser, setNewUser] = useState({ email: '', password: '', full_name: '', phone: '', position: '', company_name: '', role: 'user_fnu', side: 'FNU' })
+  const [newUser, setNewUser] = useState({
+    email: '',
+    password: '',
+    full_name: '',
+    phone: '',
+    position: '',
+    company_name: '',
+    role: 'user_fnu',
+    side: SIDE_FNU,
+    access_mode: 'all',
+    access_section_id: '',
+    preset_key: ''
+  })
   const [inviteForm, setInviteForm] = useState({ email: '', role: 'user_fnu', side: SIDE_FNU, expires_hours: 24 })
+  const [sectionsCatalog, setSectionsCatalog] = useState([])
+  const [scopeByUser, setScopeByUser] = useState({})
+  const [profileDrafts, setProfileDrafts] = useState({})
+  const [savingScopeUserId, setSavingScopeUserId] = useState('')
+  const [savingProfileUserId, setSavingProfileUserId] = useState('')
   const [creating, setCreating] = useState(false)
   const [sendingInvite, setSendingInvite] = useState(false)
   const modalRef = useRef(null)
@@ -2800,14 +2807,89 @@ function UserManagement({ onClose }) {
 
   useFocusTrap(modalRef, true)
 
-  useEffect(() => {
-    const loadUsers = async () => {
-      const { data } = await supabase.from('profiles').select('*').order('created_at', { ascending: false })
-      safeSetState(setUsers)(data || [])
-      safeSetState(setLoading)(false)
+  const loadSectionsCatalog = useCallback(async () => {
+    try {
+      const { data, error } = await invokeUserAccessAdminWithAuthRetry({
+        action: 'list_sections',
+        app_slug: 'audit'
+      })
+      if (error || !data?.ok) throw error || new Error(data?.error || 'list_sections_failed')
+      safeSetState(setSectionsCatalog)(Array.isArray(data.sections) ? data.sections : [])
+    } catch {
+      const { data } = await supabase
+        .from('document_sections')
+        .select('id, company_id, parent_section_id, code, name_pl, name_uk, order_index')
+        .order('company_id', { ascending: true })
+        .order('order_index', { ascending: true })
+      safeSetState(setSectionsCatalog)(Array.isArray(data) ? data : [])
     }
-    loadUsers()
   }, [safeSetState])
+
+  const applyProfileDrafts = useCallback((rows) => {
+    const next = {}
+    ;(rows || []).forEach((u) => {
+      next[u.id] = {
+        full_name: String(u.full_name || ''),
+        position: String(u.position || ''),
+        phone: String(u.phone || ''),
+        company_name: String(u.company_name || ''),
+        role: String(u.role || 'user_fnu'),
+        side: normalizeSide(u.side || SIDE_FNU),
+        is_active: Boolean(u.is_active)
+      }
+    })
+    safeSetState(setProfileDrafts)(next)
+  }, [safeSetState])
+
+  const loadScopesForUsers = useCallback(async (rows) => {
+    const userIds = (rows || []).map((u) => String(u.id || '')).filter(isValidUUID)
+    if (userIds.length === 0) {
+      safeSetState(setScopeByUser)({})
+      return
+    }
+    const fallback = {}
+    userIds.forEach((id) => { fallback[id] = { mode: 'all', section_id: '' } })
+    try {
+      const { data, error } = await invokeUserAccessAdminWithAuthRetry({
+        action: 'list_scopes',
+        app_slug: 'audit',
+        user_ids: userIds
+      })
+      if (error || !data?.ok) throw error || new Error(data?.error || 'list_scopes_failed')
+      const next = { ...fallback }
+      ;(Array.isArray(data.scopes) ? data.scopes : []).forEach((scope) => {
+        const userId = String(scope?.user_id || '')
+        if (!isValidUUID(userId)) return
+        next[userId] = {
+          mode: String(scope?.mode || 'all') === 'single' ? 'single' : 'all',
+          section_id: String(scope?.section_id || '')
+        }
+      })
+      safeSetState(setScopeByUser)(next)
+    } catch {
+      safeSetState(setScopeByUser)(fallback)
+    }
+  }, [safeSetState])
+
+  const loadUsers = useCallback(async () => {
+    safeSetState(setLoading)(true)
+    let rows = []
+    try {
+      const { data, error } = await invokeUserAccessAdminWithAuthRetry({
+        action: 'list_users',
+        app_slug: 'audit'
+      })
+      if (error || !data?.ok) throw error || new Error(data?.error || 'list_users_failed')
+      rows = Array.isArray(data.users) ? data.users : []
+    } catch {
+      const { data } = await supabase.from('profiles').select('*').order('created_at', { ascending: false })
+      rows = Array.isArray(data) ? data : []
+    }
+    safeSetState(setUsers)(rows)
+    applyProfileDrafts(rows)
+    await loadScopesForUsers(rows)
+    safeSetState(setLoading)(false)
+  }, [safeSetState, applyProfileDrafts, loadScopesForUsers])
 
   const loadInvites = useCallback(async () => {
     safeSetState(setLoadingInvites)(true)
@@ -2824,11 +2906,80 @@ function UserManagement({ onClose }) {
   }, [addToast, safeSetState])
 
   useEffect(() => {
+    loadSectionsCatalog()
+  }, [loadSectionsCatalog])
+
+  useEffect(() => {
+    loadUsers()
+  }, [loadUsers])
+
+  useEffect(() => {
     loadInvites()
   }, [loadInvites])
 
+  const setProfileDraftField = (userId, key, value) => {
+    safeSetState(setProfileDrafts)((prev) => ({
+      ...prev,
+      [userId]: {
+        ...(prev[userId] || {}),
+        [key]: value
+      }
+    }))
+  }
+
+  const setScopeDraft = (userId, patch) => {
+    safeSetState(setScopeByUser)((prev) => ({
+      ...prev,
+      [userId]: {
+        ...(prev[userId] || { mode: 'all', section_id: '' }),
+        ...patch
+      }
+    }))
+  }
+
+  const saveUserScope = async (userId, customScope = null, silent = false) => {
+    const draft = customScope || scopeByUser[userId] || { mode: 'all', section_id: '' }
+    if (!['all', 'single'].includes(String(draft.mode || ''))) {
+      addToast('Wybierz tryb dostępu: all albo single', 'warning')
+      return false
+    }
+    if (draft.mode === 'single' && !isValidUUID(String(draft.section_id || ''))) {
+      addToast('Wybierz folder dla trybu single', 'warning')
+      return false
+    }
+    setSavingScopeUserId(userId)
+    try {
+      const { data, error } = await invokeUserAccessAdminWithAuthRetry({
+        action: 'set_scope',
+        app_slug: 'audit',
+        user_id: userId,
+        mode: draft.mode,
+        section_id: draft.mode === 'single' ? draft.section_id : null
+      })
+      if (error || !data?.ok) throw error || new Error(data?.error || 'set_scope_failed')
+      safeSetState(setScopeByUser)((prev) => ({
+        ...prev,
+        [userId]: {
+          mode: draft.mode,
+          section_id: draft.mode === 'single' ? String(draft.section_id || '') : ''
+        }
+      }))
+      if (!silent) addToast('Dostęp do folderów zapisany / Доступ до папок збережено', 'success')
+      return true
+    } catch (err) {
+      if (!silent) addToast(`Błąd dostępu: ${sanitizeText(err?.message || 'set_scope_failed')}`, 'error')
+      return false
+    } finally {
+      setSavingScopeUserId('')
+    }
+  }
+
   const createUser = async (e) => {
     e.preventDefault()
+    if (newUser.access_mode === 'single' && !isValidUUID(String(newUser.access_section_id || ''))) {
+      addToast('Wybierz folder dla trybu single / Виберіть папку для режиму single', 'warning')
+      return
+    }
     setCreating(true)
     try {
       const { data, error } = await supabase.auth.signUp({
@@ -2866,12 +3017,27 @@ function UserManagement({ onClose }) {
           })
         }
         await logAudit(profile.id, 'create_user', 'profile', data.user.id)
+        await saveUserScope(
+          data.user.id,
+          { mode: newUser.access_mode, section_id: newUser.access_section_id },
+          true
+        )
       }
 
-      setNewUser({ email: '', password: '', full_name: '', phone: '', position: '', company_name: '', role: 'user_fnu', side: SIDE_FNU })
-
-      const { data: usersData } = await supabase.from('profiles').select('*').order('created_at', { ascending: false })
-      safeSetState(setUsers)(usersData || [])
+      setNewUser({
+        email: '',
+        password: '',
+        full_name: '',
+        phone: '',
+        position: '',
+        company_name: '',
+        role: 'user_fnu',
+        side: SIDE_FNU,
+        access_mode: 'all',
+        access_section_id: '',
+        preset_key: ''
+      })
+      await loadUsers()
 
       addToast('Użytkownik utworzony / Користувача створено', 'success')
     } catch (err) { addToast('Błąd: ' + err.message, 'error') }
@@ -2879,26 +3045,47 @@ function UserManagement({ onClose }) {
   }
 
   const updateUser = async (userId, updates) => {
-    const next = { ...updates }
-    if (next.side) next.side = normalizeSide(next.side)
-
-    let { error } = await supabase.from('profiles').update(next).eq('id', userId)
-    // Backward-compat for legacy DB values.
-    if (error && next.side === SIDE_AUDITOR) {
-      const retry = await supabase.from('profiles').update({ ...next, side: SIDE_OPERATOR_LEGACY }).eq('id', userId)
-      error = retry.error
+    setSavingProfileUserId(userId)
+    try {
+      const next = { ...updates }
+      if (next.side) next.side = normalizeSide(next.side)
+      const payload = {
+        action: 'update_profile',
+        app_slug: 'audit',
+        user_id: userId,
+        ...next
+      }
+      const { data, error } = await invokeUserAccessAdminWithAuthRetry(payload)
+      if (error || !data?.ok) {
+        let { error: directError } = await supabase.from('profiles').update(next).eq('id', userId)
+        if (directError && next.side === SIDE_AUDITOR) {
+          const retry = await supabase.from('profiles').update({ ...next, side: SIDE_OPERATOR_LEGACY }).eq('id', userId)
+          directError = retry.error
+        }
+        if (directError) throw directError
+      }
+      await logAudit(profile.id, 'update_user', 'profile', userId, next)
+      await loadUsers()
+      addToast('Zaktualizowano / Оновлено', 'success')
+    } catch (err) {
+      addToast('Błąd: ' + sanitizeText(err?.message || 'update_failed'), 'error')
+    } finally {
+      setSavingProfileUserId('')
     }
-    if (error) {
-      addToast('Błąd: ' + sanitizeText(error.message || 'update_failed'), 'error')
-      return
-    }
+  }
 
-    await logAudit(profile.id, 'update_user', 'profile', userId, next)
-
-    const { data } = await supabase.from('profiles').select('*').order('created_at', { ascending: false })
-    safeSetState(setUsers)(data || [])
-
-    addToast('Zaktualizowano / Оновлено', 'success')
+  const applyPreset = (presetIndex) => {
+    const idx = Number(presetIndex)
+    if (!Number.isFinite(idx) || idx < 0 || idx >= EXPERT_PRESETS.length) return
+    const preset = EXPERT_PRESETS[idx]
+    setNewUser((prev) => ({
+      ...prev,
+      preset_key: String(idx),
+      full_name: preset.full_name,
+      position: preset.position,
+      side: preset.side,
+      role: preset.role
+    }))
   }
 
   const sendInvite = async (e) => {
@@ -3043,6 +3230,18 @@ function UserManagement({ onClose }) {
             <h4><BiText pl="Nowy użytkownik" uk="Новий користувач" /></h4>
             <form onSubmit={createUser} className="user-form">
               <div className="form-grid">
+                <select
+                  value={newUser.preset_key}
+                  onChange={e => applyPreset(e.target.value)}
+                  aria-label="Szablon eksperta"
+                >
+                  <option value="">Szablon eksperta (opcjonalnie)</option>
+                  {EXPERT_PRESETS.map((preset, idx) => (
+                    <option key={`${preset.full_name}-${idx}`} value={idx}>
+                      {preset.full_name} - {preset.position}
+                    </option>
+                  ))}
+                </select>
                 <input placeholder="Email" type="email" value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} required aria-label="Email" />
                 <input placeholder="Hasło / Пароль" type="password" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} required minLength={6} aria-label="Hasło" />
                 <input placeholder="Imię i nazwisko / Ім'я" value={newUser.full_name} onChange={e => setNewUser({...newUser, full_name: e.target.value})} required aria-label="Imię i nazwisko" />
@@ -3055,6 +3254,23 @@ function UserManagement({ onClose }) {
                 <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value})} aria-label="Rola">
                   {Object.entries(ROLES).map(([k, v]) => <option key={k} value={k}>{v.pl}</option>)}
                 </select>
+                <select value={newUser.access_mode} onChange={e => setNewUser({ ...newUser, access_mode: e.target.value, access_section_id: e.target.value === 'all' ? '' : newUser.access_section_id })} aria-label="Zakres dostępu folderów">
+                  <option value="all">Dostęp do wszystkich folderów</option>
+                  <option value="single">Dostęp tylko do jednej папки</option>
+                </select>
+                <select
+                  value={newUser.access_section_id}
+                  onChange={e => setNewUser({ ...newUser, access_section_id: e.target.value })}
+                  aria-label="Folder dostępu"
+                  disabled={newUser.access_mode !== 'single'}
+                >
+                  <option value="">Wybierz folder</option>
+                  {sectionsCatalog.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.code} {s.name_pl}
+                    </option>
+                  ))}
+                </select>
               </div>
               <button type="submit" className="btn-primary" disabled={creating}>{creating ? '...' : 'Utwórz / Створити'}</button>
             </form>
@@ -3065,11 +3281,12 @@ function UserManagement({ onClose }) {
             <table className="users-table" aria-label="Lista użytkowników">
               <thead>
                 <tr>
-                  <th scope="col">Imię / Ім'я</th>
+                  <th scope="col">Imię i nazwisko</th>
+                  <th scope="col">Posada / Посада</th>
                   <th scope="col">Email</th>
-                  <th scope="col">Telefon</th>
                   <th scope="col">Strona</th>
                   <th scope="col">Rola</th>
+                  <th scope="col">Dostęp folderów</th>
                   <th scope="col">Status</th>
                   <th scope="col">Akcje</th>
                 </tr>
@@ -3077,29 +3294,105 @@ function UserManagement({ onClose }) {
               <tbody>
                 {users.map(u => (
                   <tr key={u.id} className={u.is_active ? '' : 'inactive'}>
-                    <td><SafeText>{u.full_name || '—'}</SafeText></td>
+                    <td>
+                      <input
+                        value={profileDrafts[u.id]?.full_name ?? u.full_name ?? ''}
+                        onChange={e => setProfileDraftField(u.id, 'full_name', e.target.value)}
+                        aria-label={`Imię i nazwisko dla ${u.email}`}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        value={profileDrafts[u.id]?.position ?? u.position ?? ''}
+                        onChange={e => setProfileDraftField(u.id, 'position', e.target.value)}
+                        aria-label={`Stanowisko dla ${u.email}`}
+                      />
+                    </td>
                     <td>{u.email}</td>
-                    <td>{u.phone || '—'}</td>
                     <td>
                       <select
-                        value={normalizeSide(u.side) || SIDE_FNU}
-                        onChange={e => updateUser(u.id, { side: e.target.value })}
-                        className={`side-select ${sideClass(u.side)}`}
+                        value={normalizeSide(profileDrafts[u.id]?.side || u.side) || SIDE_FNU}
+                        onChange={e => setProfileDraftField(u.id, 'side', e.target.value)}
+                        className={`side-select ${sideClass(profileDrafts[u.id]?.side || u.side)}`}
                         aria-label={`Strona dla ${u.email}`}
                       >
                         {Object.entries(SIDES).map(([k, v]) => <option key={k} value={k}>{v.pl}</option>)}
                       </select>
                     </td>
                     <td>
-                      <select value={u.role} onChange={e => updateUser(u.id, { role: e.target.value })} disabled={u.id === profile?.id} aria-label={`Rola dla ${u.email}`}>
+                      <select
+                        value={profileDrafts[u.id]?.role || u.role}
+                        onChange={e => setProfileDraftField(u.id, 'role', e.target.value)}
+                        disabled={u.id === profile?.id}
+                        aria-label={`Rola dla ${u.email}`}
+                      >
                         {Object.entries(ROLES).map(([k, v]) => <option key={k} value={k}>{v.pl}</option>)}
                       </select>
                     </td>
-                    <td><span className={`status-badge ${u.is_active ? 'active' : 'inactive'}`}>{u.is_active ? 'Aktywny' : 'Nieaktywny'}</span></td>
                     <td>
+                      <div style={{ display: 'grid', gap: '0.35rem' }}>
+                        <select
+                          value={scopeByUser[u.id]?.mode || 'all'}
+                          onChange={e => setScopeDraft(u.id, { mode: e.target.value, section_id: e.target.value === 'all' ? '' : (scopeByUser[u.id]?.section_id || '') })}
+                          aria-label={`Zakres folderów dla ${u.email}`}
+                        >
+                          <option value="all">Wszystkie</option>
+                          <option value="single">Jedna папка</option>
+                        </select>
+                        <select
+                          value={scopeByUser[u.id]?.section_id || ''}
+                          onChange={e => setScopeDraft(u.id, { section_id: e.target.value })}
+                          disabled={(scopeByUser[u.id]?.mode || 'all') !== 'single'}
+                          aria-label={`Folder dla ${u.email}`}
+                        >
+                          <option value="">Wybierz folder</option>
+                          {sectionsCatalog.map((s) => (
+                            <option key={s.id} value={s.id}>{s.code} {s.name_pl}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => saveUserScope(u.id)}
+                          className="btn-success"
+                          disabled={savingScopeUserId === u.id}
+                          aria-label={`Zapisz доступ folderów для ${u.email}`}
+                        >
+                          {savingScopeUserId === u.id ? '...' : '💾 Dostęp'}
+                        </button>
+                      </div>
+                    </td>
+                    <td>
+                      <span className={`status-badge ${Boolean(profileDrafts[u.id]?.is_active ?? u.is_active) ? 'active' : 'inactive'}`}>
+                        {Boolean(profileDrafts[u.id]?.is_active ?? u.is_active) ? 'Aktywny' : 'Nieaktywny'}
+                      </span>
+                    </td>
+                    <td>
+                      <button
+                        onClick={() => updateUser(u.id, {
+                          full_name: profileDrafts[u.id]?.full_name ?? u.full_name ?? '',
+                          position: profileDrafts[u.id]?.position ?? u.position ?? '',
+                          phone: profileDrafts[u.id]?.phone ?? u.phone ?? '',
+                          company_name: profileDrafts[u.id]?.company_name ?? u.company_name ?? '',
+                          side: normalizeSide(profileDrafts[u.id]?.side || u.side || SIDE_FNU),
+                          role: profileDrafts[u.id]?.role || u.role,
+                          is_active: Boolean(profileDrafts[u.id]?.is_active ?? u.is_active)
+                        })}
+                        className="btn-success"
+                        disabled={savingProfileUserId === u.id}
+                        aria-label={`Zapisz profil ${u.email}`}
+                      >
+                        {savingProfileUserId === u.id ? '...' : '💾 Profil'}
+                      </button>
                       {u.id !== profile?.id && (
-                        <button onClick={() => updateUser(u.id, { is_active: !u.is_active })} className={u.is_active ? 'btn-danger' : 'btn-success'} aria-label={u.is_active ? 'Dezaktywuj' : 'Aktywuj'}>
-                          {u.is_active ? '🔒' : '🔓'}
+                        <button
+                          onClick={() => {
+                            const activeNow = Boolean(profileDrafts[u.id]?.is_active ?? u.is_active)
+                            setProfileDraftField(u.id, 'is_active', !activeNow)
+                            updateUser(u.id, { is_active: !activeNow })
+                          }}
+                          className={Boolean(profileDrafts[u.id]?.is_active ?? u.is_active) ? 'btn-danger' : 'btn-success'}
+                          aria-label={Boolean(profileDrafts[u.id]?.is_active ?? u.is_active) ? 'Dezaktywuj' : 'Aktywuj'}
+                        >
+                          {Boolean(profileDrafts[u.id]?.is_active ?? u.is_active) ? '🔒' : '🔓'}
                         </button>
                       )}
                     </td>

@@ -2996,6 +2996,14 @@ body {
   border: 1px solid var(--border);
 }
 
+.users-table input {
+  width: 100%;
+  min-width: 150px;
+  padding: 0.25rem 0.45rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
 .side-select.fnu { border-color: var(--fnu-color); }
 .side-select.auditor,
 .side-select.operator { border-color: var(--auditor-color); }
