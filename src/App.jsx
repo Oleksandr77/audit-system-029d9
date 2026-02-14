@@ -407,7 +407,7 @@ async function llmTranslateStrict(text, source, target) {
           target_language: target,
           text,
           strict: true,
-          system_instruction: 'Translate only. No explanations. Preserve names, dates, numbers and punctuation. Output only translated text.'
+          system_instruction: 'Professional native-level translation for audit/business context. Keep exact meaning, tone, names, dates, numbers and punctuation. No explanations, no notes, output translated text only.'
         }
       }),
       TRANSLATION_TIMEOUT_MS
@@ -1465,9 +1465,14 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView, canComment
 // =====================================================
 // COMMENT ITEM COMPONENT (Memoized for performance)
 // =====================================================
-const CommentItem = ({ comment, depth, maxDepth, onReply, canComment, displayLanguage }) => {
+const CommentItem = ({ comment, depth, maxDepth, onReply, canComment }) => {
   if (depth >= maxDepth) return null
-  const renderedContent = resolveDisplayedText(comment, displayLanguage)
+  const source = comment?.source_language || detectLanguage(comment?.content || '')
+  const sourceText = parseMessageContextEnvelope(comment?.content || '').text
+  const translatedPl = parseMessageContextEnvelope(comment?.translated_pl || '').text
+  const translatedUk = parseMessageContextEnvelope(comment?.translated_uk || '').text
+  const renderedPl = translatedPl || (source === 'pl' ? sourceText : sourceText)
+  const renderedUk = translatedUk || (source === 'uk' ? sourceText : sourceText)
   const authorKey = comment.author_id || comment.author?.email || comment.author?.full_name || 'unknown'
   const tone = getCommentAuthorTone(authorKey)
   const commentStyle = {
@@ -1487,7 +1492,16 @@ const CommentItem = ({ comment, depth, maxDepth, onReply, canComment, displayLan
         </span>
         <time dateTime={comment.created_at}>{new Date(comment.created_at).toLocaleString()}</time>
       </div>
-      <p className="comment-content"><SafeText>{renderedContent}</SafeText></p>
+      <div className="comment-bilingual">
+        <div className="comment-line">
+          <span className="comment-lang">PL</span>
+          <p className="comment-content compact"><SafeText>{renderedPl}</SafeText></p>
+        </div>
+        <div className="comment-line">
+          <span className="comment-lang">UA</span>
+          <p className="comment-content compact"><SafeText>{renderedUk}</SafeText></p>
+        </div>
+      </div>
       <div className="comment-actions">
         {canComment && depth < maxDepth - 1 && (
           <button onClick={() => onReply(comment.id)} aria-label="Odpowiedz / Відповісти">↩️ Odpowiedz</button>
@@ -1511,7 +1525,6 @@ function Comments({ entityType = 'document', entityId, parentDocumentId = null, 
   const profile = useProfile()
   const safeSetState = useSafeAsync()
   const MAX_REPLY_DEPTH = 5
-  const resolvedDisplayLanguage = displayLanguage === 'pl' ? 'pl' : 'uk'
   const isLawyerAdmin = profile?.role === 'lawyer_admin' || profile?.role === 'super_admin'
   const isAuditor = normalizeSide(profile?.side) === SIDE_AUDITOR
   const canUseAuditorChannel = isLawyerAdmin || isAuditor
@@ -1654,7 +1667,6 @@ function Comments({ entityType = 'document', entityId, parentDocumentId = null, 
         maxDepth={MAX_REPLY_DEPTH}
         onReply={setReplyTo}
         canComment={canComment}
-        displayLanguage={resolvedDisplayLanguage}
       />
       {getReplies(comment.id).map(r => renderCommentTree(r, depth + 1))}
     </div>

@@ -2214,6 +2214,31 @@ body {
 
 .comment-header time { color: var(--text-muted); }
 .comment-content { font-size: 0.9rem; margin-bottom: 0.5rem; }
+.comment-bilingual {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.55rem;
+}
+.comment-line {
+  display: grid;
+  grid-template-columns: 32px 1fr;
+  align-items: start;
+  gap: 0.45rem;
+}
+.comment-lang {
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding-top: 0.12rem;
+}
+.comment-content.compact {
+  font-size: 0.82rem;
+  line-height: 1.35;
+  margin-bottom: 0;
+}
 .comment-meta {
   font-size: 0.72rem;
   color: var(--text-light);
