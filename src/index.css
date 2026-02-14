@@ -2204,6 +2204,14 @@ body {
   gap: 0.5rem;
 }
 
+.comment-author-name {
+  font-weight: 600;
+  padding: 0.08rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.58);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
 .comment-header time { color: var(--text-muted); }
 .comment-content { font-size: 0.9rem; margin-bottom: 0.5rem; }
 .comment-meta {

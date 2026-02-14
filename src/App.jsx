@@ -97,6 +97,17 @@ const FILE_ICONS = {
   'xlsx': '📗', 'txt': '📄', 'csv': '📊', 'default': '📎'
 }
 
+const COMMENT_AUTHOR_PALETTE = [
+  { bg: '#fff5f7', border: '#f9a8d4', accent: '#9d174d' },
+  { bg: '#f5f3ff', border: '#c4b5fd', accent: '#5b21b6' },
+  { bg: '#eff6ff', border: '#93c5fd', accent: '#1d4ed8' },
+  { bg: '#ecfeff', border: '#67e8f9', accent: '#0e7490' },
+  { bg: '#ecfdf5', border: '#86efac', accent: '#166534' },
+  { bg: '#fffbeb', border: '#fcd34d', accent: '#92400e' },
+  { bg: '#fff7ed', border: '#fdba74', accent: '#9a3412' },
+  { bg: '#f8fafc', border: '#cbd5e1', accent: '#334155' },
+]
+
 const translateCache = new Map()
 const suggestCache = new Map()
 
@@ -228,6 +239,21 @@ function getFileExtension(filename) {
 function isValidUUID(str) {
   if (!str || typeof str !== 'string') return false
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str)
+}
+
+function hashStringToIndex(value, modulo) {
+  const input = String(value || '')
+  let hash = 0
+  for (let i = 0; i < input.length; i++) {
+    hash = ((hash << 5) - hash) + input.charCodeAt(i)
+    hash |= 0
+  }
+  return Math.abs(hash) % Math.max(1, modulo)
+}
+
+function getCommentAuthorTone(authorKey) {
+  const idx = hashStringToIndex(authorKey || 'unknown', COMMENT_AUTHOR_PALETTE.length)
+  return COMMENT_AUTHOR_PALETTE[idx]
 }
 
 function validateFile(file) {
@@ -1074,25 +1100,63 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView, canComment
 
   const handleDelete = async (fileId, filePath) => {
     if (!confirm('Usunąć plik? / Видалити файл?')) return
-    const fileRecord = files.find(f => f.id === fileId)
-    if (fileRecord && versionTableReady) {
-      try {
-        await snapshotCurrentVersion(fileRecord, 'before_delete')
-      } catch (err) {
-        addToast(`Błąd wersji przed usunięciem: ${sanitizeText(err?.message || 'snapshot_failed')}`, 'warning')
+    try {
+      const fileRecord = files.find(f => f.id === fileId)
+      if (fileRecord && versionTableReady) {
+        try {
+          await snapshotCurrentVersion(fileRecord, 'before_delete')
+        } catch (err) {
+          addToast(`Błąd wersji przed usunięciem: ${sanitizeText(err?.message || 'snapshot_failed')}`, 'warning')
+        }
       }
-    }
-    await supabase.storage.from('documents').remove([filePath])
-    await supabase.from('document_files').delete().eq('id', fileId)
-    await logAudit(profile.id, 'delete_file', 'document_file', fileId)
-    loadFiles()
-    onUpdate?.()
-    addToast('Plik usunięty / Файл видалено', 'success')
-    if (previewFile?.id === fileId) {
-      setPreviewFile(null)
-      setPreviewText('')
-      if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl)
-      setPreviewUrl('')
+
+      const deleteFileRow = async () => {
+        const result = await supabase
+          .from('document_files')
+          .delete()
+          .eq('id', fileId)
+          .select('id,file_path')
+          .limit(1)
+        return result
+      }
+
+      let { data: deletedRows, error: deleteError } = await deleteFileRow()
+      let deletedRow = Array.isArray(deletedRows) ? deletedRows[0] : null
+
+      if (deleteError && /foreign key|constraint|violates/i.test(String(deleteError.message || ''))) {
+        await supabase.from('document_access').delete().eq('file_id', fileId)
+        await supabase.from('document_file_versions').delete().eq('file_id', fileId)
+        const retry = await deleteFileRow()
+        deletedRows = retry.data
+        deleteError = retry.error
+        deletedRow = Array.isArray(deletedRows) ? deletedRows[0] : null
+      }
+
+      if (deleteError) {
+        throw new Error(deleteError.message || 'delete_failed')
+      }
+      if (!deletedRow?.id) {
+        throw new Error('Delete failed (no row removed). Check permissions or file ownership.')
+      }
+
+      const storageTargetPath = deletedRow.file_path || filePath
+      const { error: storageError } = await supabase.storage.from('documents').remove([storageTargetPath])
+      if (storageError && !/not found/i.test(String(storageError.message || ''))) {
+        addToast(`Plik usunięty, ale storage cleanup failed: ${sanitizeText(storageError.message || 'cleanup_failed')}`, 'warning')
+      }
+
+      await logAudit(profile.id, 'delete_file', 'document_file', fileId)
+      await loadFiles()
+      onUpdate?.()
+      addToast('Plik usunięty / Файл видалено', 'success')
+      if (previewFile?.id === fileId) {
+        setPreviewFile(null)
+        setPreviewText('')
+        if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl)
+        setPreviewUrl('')
+      }
+    } catch (err) {
+      addToast(`Błąd usuwania: ${sanitizeText(err?.message || 'delete_failed')}`, 'error')
     }
   }
 
@@ -1421,12 +1485,21 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView, canComment
 const CommentItem = ({ comment, depth, maxDepth, onReply, canComment, displayLanguage }) => {
   if (depth >= maxDepth) return null
   const renderedContent = resolveDisplayedText(comment, displayLanguage)
+  const authorKey = comment.author_id || comment.author?.email || comment.author?.full_name || 'unknown'
+  const tone = getCommentAuthorTone(authorKey)
+  const commentStyle = {
+    marginLeft: depth * 16,
+    backgroundColor: tone.bg,
+    borderLeftColor: tone.border,
+  }
 
   return (
-    <div className={`comment ${depth > 0 ? 'reply' : ''}`} style={{ marginLeft: depth * 16 }}>
+    <div className={`comment ${depth > 0 ? 'reply' : ''}`} style={commentStyle}>
       <div className="comment-header">
         <span className="comment-author">
-          <SafeText>{comment.author?.full_name || comment.author?.email}</SafeText>
+          <span className="comment-author-name" style={{ color: tone.accent }}>
+            <SafeText>{comment.author?.full_name || comment.author?.email}</SafeText>
+          </span>
           <span className={`side-badge ${sideClass(comment.author?.side)}`}>{formatSideLabel(comment.author?.side)}</span>
         </span>
         <time dateTime={comment.created_at}>{new Date(comment.created_at).toLocaleString()}</time>
