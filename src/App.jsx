@@ -341,16 +341,21 @@ async function invokeFunctionWithAuthRetry(functionName, payload) {
 }
 
 async function invokeFunctionWithSessionRetry(functionName, payload) {
-  let result = await supabase.functions.invoke(functionName, { body: payload })
-  if (!result.error) return result
+  const invokeWithToken = async (token) => {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined
+    return supabase.functions.invoke(functionName, { headers, body: payload })
+  }
 
-  const details = await parseFunctionsInvokeError(result.error)
-  if (!/invalid jwt/i.test(details)) return result
+  const { data: sessionData } = await supabase.auth.getSession()
+  const sessionToken = sessionData?.session?.access_token || null
+
+  let result = await invokeWithToken(sessionToken)
+  if (!result.error) return result
 
   const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession()
   if (refreshErr || !refreshed?.session?.access_token) return result
 
-  result = await supabase.functions.invoke(functionName, { body: payload })
+  result = await invokeWithToken(refreshed.session.access_token)
   return result
 }
 
@@ -1644,7 +1649,12 @@ function Comments({ entityType = 'document', entityId, parentDocumentId = null, 
         sourceLanguage === 'uk' ? Promise.resolve(cleanContent) : llmTranslateStrict(cleanContent, sourceLanguage, 'uk')
       ])
     } catch (translationError) {
-      addToast(`Translation failed: ${sanitizeText(String(translationError?.message || 'llm_unavailable'))}`, 'error')
+      const details = sanitizeText(String(translationError?.message || 'llm_unavailable'))
+      if (/invalid jwt/i.test(details)) {
+        addToast('Session expired. Please sign in again / Сесія завершилась. Увійдіть знову', 'error')
+      } else {
+        addToast(`Translation failed: ${details}`, 'error')
+      }
       setSubmitting(false)
       return
     }
@@ -2470,8 +2480,21 @@ function Chat({
 
     setSending(true)
     const sourceLanguage = detectLanguage(messagePlain)
-    const translatedPl = sourceLanguage === 'pl' ? messagePlain : await llmTranslateStrict(messagePlain, sourceLanguage, 'pl')
-    const translatedUk = sourceLanguage === 'uk' ? messagePlain : await llmTranslateStrict(messagePlain, sourceLanguage, 'uk')
+    let translatedPl = messagePlain
+    let translatedUk = messagePlain
+    try {
+      translatedPl = sourceLanguage === 'pl' ? messagePlain : await llmTranslateStrict(messagePlain, sourceLanguage, 'pl')
+      translatedUk = sourceLanguage === 'uk' ? messagePlain : await llmTranslateStrict(messagePlain, sourceLanguage, 'uk')
+    } catch (translationError) {
+      const details = sanitizeText(String(translationError?.message || 'llm_unavailable'))
+      if (/invalid jwt/i.test(details)) {
+        addToast('Session expired. Please sign in again / Сесія завершилась. Увійдіть знову', 'error')
+      } else {
+        addToast(`Translation failed: ${details}`, 'error')
+      }
+      setSending(false)
+      return
+    }
 
     const envelope = buildMessageContextEnvelope({
       companyId: targetCompanyId,
