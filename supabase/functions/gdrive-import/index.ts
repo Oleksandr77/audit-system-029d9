@@ -48,6 +48,8 @@ function parseFileId(input: string) {
   const raw = String(input || "").trim();
   const matchA = raw.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
   if (matchA?.[1]) return matchA[1];
+  const matchGeneric = raw.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (matchGeneric?.[1]) return matchGeneric[1];
   const matchB = raw.match(/[?&]id=([a-zA-Z0-9_-]+)/);
   if (matchB?.[1]) return matchB[1];
   if (/^[a-zA-Z0-9_-]{10,}$/.test(raw)) return raw;
@@ -426,8 +428,11 @@ Deno.serve(async (req) => {
     const sourceUrlRaw = String(body.source_url || body.folder_url || body.file_url || "").trim();
     const folderId = parseFolderId(sourceUrlRaw);
     const fileId = parseFileId(sourceUrlRaw);
-    const importType: "folder" | "file" =
-      importTypeRaw === "file" ? "file" : importTypeRaw === "folder" ? "folder" : sourceUrlRaw.includes("/file/") ? "file" : "folder";
+    let importType: "folder" | "file" =
+      importTypeRaw === "file" ? "file" : importTypeRaw === "folder" ? "folder" : sourceUrlRaw.includes("/folders/") ? "folder" : "file";
+    // Auto-fallback to real source type if caller sent mismatched import_type.
+    if (importType === "file" && !fileId && folderId) importType = "folder";
+    if (importType === "folder" && !folderId && fileId) importType = "file";
     let companyId = String(body.company_id || "").trim();
     const sectionId = String(body.section_id || "").trim();
     const targetDocumentId = String(body.target_document_id || "").trim();
