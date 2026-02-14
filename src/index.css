@@ -1656,6 +1656,29 @@ body {
   gap: 0.4rem;
 }
 
+.doc-local-upload-btn {
+  border: 1px solid rgba(23, 68, 84, 0.32);
+  background: #fff;
+  color: #174454;
+  border-radius: 8px;
+  padding: 0.36rem 0.5rem;
+  font-size: 0.76rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+}
+
+.doc-local-upload-btn:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.doc-local-upload-btn:hover:not(:disabled) {
+  background: rgba(23, 68, 84, 0.08);
+  border-color: rgba(23, 68, 84, 0.58);
+}
+
 .doc-drive-import-btn {
   border: 1px solid rgba(15, 157, 88, 0.38);
   background: #fff;
@@ -1680,6 +1703,12 @@ body {
 }
 
 .drive-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-block;
+}
+
+.local-upload-icon {
   width: 16px;
   height: 16px;
   display: inline-block;

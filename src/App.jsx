@@ -174,6 +174,16 @@ function GoogleDriveIcon({ className = '' }) {
   )
 }
 
+function LocalUploadIcon({ className = '' }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+      <path d="M12 3l4 4h-3v6h-2V7H8z" fill="#174454" />
+      <path d="M5 14h14v4a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3z" fill="#2b6b82" />
+      <path d="M6 14h12" stroke="#fff" strokeWidth="1.5" />
+    </svg>
+  )
+}
+
 // =====================================================
 // SECURITY UTILITIES (Enhanced XSS Protection)
 // =====================================================
@@ -1264,18 +1274,7 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
     <div className="file-upload">
       <div className="files-header">
         <BiText pl={`Pliki (${files.length}/${MAX_FILES_PER_DOC})`} uk={`Файли (${files.length}/${MAX_FILES_PER_DOC})`} />
-        {canAdd && files.length < MAX_FILES_PER_DOC && (
-          <label className="upload-btn">
-            {uploading ? `${uploadProgress}%` : '+ Dodaj / Додати'}
-            <input ref={fileInputRef} type="file" accept={ALLOWED_EXTENSIONS.join(',')} multiple onChange={handleUpload} disabled={uploading} style={{ display: 'none' }} />
-          </label>
-        )}
       </div>
-      {uploading && (
-        <div className="upload-progress" role="progressbar" aria-valuenow={uploadProgress} aria-valuemin="0" aria-valuemax="100" aria-label="Upload progress">
-          <div className="upload-progress-bar" style={{ width: `${uploadProgress}%` }} />
-        </div>
-      )}
       <ul className="files-list">
         {files.map(file => {
           const ext = file.file_type || getFileExtension(file.file_name)
@@ -3344,6 +3343,9 @@ function AppContent() {
   const [folderAclRows, setFolderAclRows] = useState([])
   const [auditAppId, setAuditAppId] = useState('')
   const [sectionToolsBusy, setSectionToolsBusy] = useState(false)
+  const [localUploadDocId, setLocalUploadDocId] = useState('')
+  const [localUploadBusyDocId, setLocalUploadBusyDocId] = useState('')
+  const localUploadInputRef = useRef(null)
   const [newDocument, setNewDocument] = useState({ code: '', name_pl: '', name_uk: '' })
   const [creatingDocument, setCreatingDocument] = useState(false)
   const addToast = useToast()
@@ -3720,6 +3722,126 @@ function AppContent() {
     setSectionToolsBusy(false)
   }
 
+  const uploadLocalFilesForDocument = async (doc, selectedFiles) => {
+    if (!doc?.id || !isValidUUID(doc.id) || !profile?.id) return
+    const files = Array.isArray(selectedFiles) ? selectedFiles : []
+    if (files.length === 0) return
+
+    setLocalUploadBusyDocId(doc.id)
+    try {
+      const { count, error: countError } = await supabase
+        .from('document_files')
+        .select('id', { count: 'exact', head: true })
+        .eq('document_id', doc.id)
+
+      let existingCount = Number.isFinite(count) ? Number(count) : 0
+      if (countError) {
+        const { data: fallbackRows, error: fallbackError } = await supabase
+          .from('document_files')
+          .select('id')
+          .eq('document_id', doc.id)
+        if (fallbackError) throw fallbackError
+        existingCount = Array.isArray(fallbackRows) ? fallbackRows.length : 0
+      }
+
+      if (existingCount + files.length > MAX_FILES_PER_DOC) {
+        addToast(`Maksymalnie ${MAX_FILES_PER_DOC} plików / Максимум ${MAX_FILES_PER_DOC} файлів`, 'error')
+        return
+      }
+
+      let successCount = 0
+      let failedCount = 0
+
+      for (const file of files) {
+        const validation = validateFile(file)
+        if (!validation.valid) {
+          failedCount++
+          addToast(validation.error, 'error')
+          continue
+        }
+
+        const safeFileName = sanitizeFileName(file.name)
+        const filePath = `${doc.id}/${safeFileName}`
+        try {
+          const { error: uploadError } = await supabase.storage.from('documents').upload(filePath, file)
+          if (uploadError) throw uploadError
+
+          const ext = getFileExtension(file.name)
+          const { data: fileData, error: dbError } = await supabase.from('document_files').insert({
+            document_id: doc.id,
+            file_name: sanitizeText(file.name),
+            file_path: filePath,
+            file_size: file.size,
+            file_type: ext,
+            mime_type: file.type,
+            uploaded_by: profile.id
+          }).select().single()
+
+          if (dbError) {
+            await supabase.storage.from('documents').remove([filePath])
+            throw dbError
+          }
+
+          await logAudit(profile.id, 'upload_file', 'document_file', doc.id, { file_name: file.name, source: 'doc_row_upload' })
+
+          if (normalizeSide(profile.side) === SIDE_FNU && fileData) {
+            await supabase.from('document_access').insert({
+              document_id: doc.id,
+              file_id: fileData.id,
+              visible_to_operator: false
+            })
+          }
+          successCount++
+        } catch (err) {
+          failedCount++
+          addToast(`Błąd: ${file.name} (${sanitizeText(err?.message || 'upload_failed')})`, 'error')
+        }
+      }
+
+      if (successCount > 0 && failedCount === 0) {
+        addToast(`Pliki przesłane (${successCount}) / Файли завантажено (${successCount})`, 'success')
+      } else if (successCount > 0 && failedCount > 0) {
+        addToast(`Częściowo: ${successCount} OK, ${failedCount} błędów / Частково: ${successCount} OK, ${failedCount} помилок`, 'warning')
+      } else if (failedCount > 0) {
+        addToast('Wysyłka nieudana / Завантаження не вдалося', 'error')
+      }
+
+      await loadSections()
+      await loadDocuments()
+    } catch (err) {
+      addToast(`Upload failed: ${sanitizeText(err?.message || 'failed')}`, 'error')
+    } finally {
+      setLocalUploadBusyDocId('')
+      setLocalUploadDocId('')
+    }
+  }
+
+  const openLocalUploadForDocument = (doc) => {
+    if (!doc?.id || !canUploadCurrentSection || sectionToolsBusy || localUploadBusyDocId) return
+    setLocalUploadDocId(doc.id)
+    if (localUploadInputRef.current) {
+      localUploadInputRef.current.value = ''
+      localUploadInputRef.current.click()
+    }
+  }
+
+  const onLocalUploadInputChange = async (e) => {
+    const selectedFiles = Array.from(e.target.files || [])
+    const targetDocId = localUploadDocId
+    e.target.value = ''
+    if (!targetDocId || selectedFiles.length === 0) {
+      setLocalUploadDocId('')
+      return
+    }
+    const targetDoc = documents.find(d => d.id === targetDocId)
+    if (!targetDoc) {
+      addToast('Document not found / Документ не знайдено', 'error')
+      setLocalUploadDocId('')
+      return
+    }
+    await uploadLocalFilesForDocument(targetDoc, selectedFiles)
+  }
+
   return (
     <ProfileContext.Provider value={profile}>
       <div className="app">
@@ -3862,6 +3984,17 @@ function AppContent() {
               </form>
             )}
 
+            <input
+              ref={localUploadInputRef}
+              type="file"
+              accept={ALLOWED_EXTENSIONS.join(',')}
+              multiple
+              onChange={onLocalUploadInputChange}
+              style={{ display: 'none' }}
+              aria-hidden="true"
+              tabIndex={-1}
+            />
+
             <div className="documents-list" role="list" aria-label="Lista dokumentów">
               {filteredDocuments.map(doc => (
                 <div key={doc.id} className="doc-row">
@@ -3890,6 +4023,20 @@ function AppContent() {
                       </span>
                     )}
                     <div className="doc-row-actions">
+                      <button
+                        type="button"
+                        className="doc-local-upload-btn"
+                        onClick={e => {
+                          e.stopPropagation()
+                          openLocalUploadForDocument(doc)
+                        }}
+                        disabled={sectionToolsBusy || Boolean(localUploadBusyDocId) || !canUploadCurrentSection}
+                        aria-label={`Upload pliku lokalnego do dokumentu ${doc.code}`}
+                        title="Upload local file"
+                      >
+                        <LocalUploadIcon className="local-upload-icon" />
+                        <span>{localUploadBusyDocId === doc.id ? 'Uploading...' : 'Upload'}</span>
+                      </button>
                       <button
                         type="button"
                         className="doc-drive-import-btn"
