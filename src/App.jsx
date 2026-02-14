@@ -814,12 +814,13 @@ function Auth() {
 // =====================================================
 // FILE UPLOAD COMPONENT
 // =====================================================
-function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
+function FileUpload({ document, onUpdate, canAdd, canDelete, canView, canComment }) {
   const [files, setFiles] = useState([])
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [versionTableReady, setVersionTableReady] = useState(true)
   const [expandedVersionFileId, setExpandedVersionFileId] = useState(null)
+  const [expandedCommentFileId, setExpandedCommentFileId] = useState(null)
   const [versionsByFile, setVersionsByFile] = useState({})
   const [loadingVersionsByFile, setLoadingVersionsByFile] = useState({})
   const [rollingBackVersionId, setRollingBackVersionId] = useState(null)
@@ -1095,22 +1096,23 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
     }
   }
 
-  const handleDownload = async (filePath, fileName) => {
-    const { data } = await supabase.storage.from('documents').download(filePath)
-    if (data) {
-      const url = URL.createObjectURL(data)
-      const a = window.document.createElement('a')
-      a.href = url; a.download = fileName; a.click()
-      setTimeout(() => URL.revokeObjectURL(url), 10000)
-      await logAudit(profile.id, 'download_file', 'document_file', document.id)
-    }
-  }
-
   const handlePreview = async (filePath) => {
-    const { data } = await supabase.storage.from('documents').createSignedUrl(filePath, 3600)
-    if (data?.signedUrl) {
-      window.open(data.signedUrl, '_blank', 'noopener,noreferrer')
+    let previewTab = null
+    try {
+      previewTab = window.open('about:blank', '_blank')
+      if (!previewTab) {
+        addToast('Popup blocked. Allow popups for this site.', 'warning')
+        return
+      }
+      previewTab.opener = null
+      previewTab.document.title = 'Preview...'
+      const { data, error } = await supabase.storage.from('documents').createSignedUrl(filePath, 3600)
+      if (error || !data?.signedUrl) throw new Error(error?.message || 'signed_url_failed')
+      previewTab.location.replace(data.signedUrl)
       await logAudit(profile.id, 'view_file', 'document_file', document.id)
+    } catch (err) {
+      if (previewTab && !previewTab.closed) previewTab.close()
+      addToast(`Błąd podglądu: ${sanitizeText(err?.message || 'preview_failed')}`, 'error')
     }
   }
 
@@ -1288,6 +1290,13 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
                 <button onClick={() => openInlinePreview(file)} aria-label="Podgląd wewnętrzny / Вбудований перегляд">🧾</button>
                 <button onClick={() => handlePreview(file.file_path)} aria-label="Podgląd zewnętrzny / Зовнішній перегляд">👁️</button>
                 <button
+                  onClick={() => setExpandedCommentFileId(prev => prev === file.id ? null : file.id)}
+                  aria-label="Komentarze pliku / Коментарі файлу"
+                  title="Komentarze pliku / Коментарі файлу"
+                >
+                  💬
+                </button>
+                <button
                   onClick={async () => {
                     const open = expandedVersionFileId === file.id
                     setExpandedVersionFileId(open ? null : file.id)
@@ -1297,7 +1306,6 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
                 >
                   🕘
                 </button>
-                <button onClick={() => handleDownload(file.file_path, file.file_name)} aria-label="Pobierz / Завантажити">⬇️</button>
                 {canDelete && <button onClick={() => handleDelete(file.id, file.file_path)} aria-label="Usuń / Видалити">🗑️</button>}
                 {normalizeSide(profile?.side) === SIDE_FNU && profile?.role === 'super_admin' && (
                   <button onClick={() => publishToOperator(file.id)} aria-label="Opublikuj dla AUDITOR" className="btn-publish">📤</button>
@@ -1328,6 +1336,19 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
                       )}
                     </>
                   )}
+                </div>
+              )}
+              {expandedCommentFileId === file.id && (
+                <div className="file-comments-panel">
+                  <Comments
+                    entityType="file"
+                    entityId={file.id}
+                    parentDocumentId={document.id}
+                    canComment={canComment}
+                    canView={canView}
+                    displayLanguage={resolveLanguageMode('auto', profile?.side)}
+                    title="File comments / Коментарі файлу"
+                  />
                 </div>
               )}
             </li>
@@ -1423,7 +1444,7 @@ const CommentItem = ({ comment, depth, maxDepth, onReply, canComment, displayLan
 // =====================================================
 // COMMENTS COMPONENT
 // =====================================================
-function Comments({ entityType = 'document', entityId, canComment, canView, displayLanguage, title }) {
+function Comments({ entityType = 'document', entityId, parentDocumentId = null, canComment, canView, displayLanguage, title }) {
   const [comments, setComments] = useState([])
   const [newComment, setNewComment] = useState('')
   const [replyTo, setReplyTo] = useState(null)
@@ -1437,7 +1458,11 @@ function Comments({ entityType = 'document', entityId, canComment, canView, disp
   const isLawyerAdmin = profile?.role === 'lawyer_admin' || profile?.role === 'super_admin'
   const isAuditor = normalizeSide(profile?.side) === SIDE_AUDITOR
   const canUseAuditorChannel = isLawyerAdmin || isAuditor
-  const entityColumn = entityType === 'section' ? 'section_id' : 'document_id'
+  const entityColumn = entityType === 'section'
+    ? 'section_id'
+    : entityType === 'file'
+      ? 'file_id'
+      : 'document_id'
 
   const loadComments = useCallback(async () => {
     if (!entityId) return
@@ -1498,6 +1523,7 @@ function Comments({ entityType = 'document', entityId, canComment, canView, disp
       comment_scope: scope,
       visible_to_sides: scope === 'auditor_channel' ? [SIDE_AUDITOR] : [SIDE_FNU]
     }
+    if (entityType === 'file' && parentDocumentId) payload.document_id = parentDocumentId
     payload[entityColumn] = entityId
 
     const { data, error } = await supabase.from('comments').insert(payload).select().single()
@@ -3041,7 +3067,7 @@ function DocumentDetail({ document, onClose, onUpdate, displayLanguage, permissi
           </div>
 
           <ErrorBoundary>
-            <FileUpload document={doc} onUpdate={onUpdate} canAdd={canAdd} canDelete={canDelete} canView={canView} />
+            <FileUpload document={doc} onUpdate={onUpdate} canAdd={canAdd} canDelete={canDelete} canView={canView} canComment={canComment} />
           </ErrorBoundary>
           <ErrorBoundary>
             <Comments
@@ -3301,7 +3327,7 @@ function InlineDocumentDrawer({ document, onUpdate, displayLanguage, permissions
       </div>
       <div className="inline-doc-panels">
         <ErrorBoundary>
-          <FileUpload document={document} onUpdate={onUpdate} canAdd={canAdd} canDelete={canDelete} canView={canView} />
+          <FileUpload document={document} onUpdate={onUpdate} canAdd={canAdd} canDelete={canDelete} canView={canView} canComment={canComment} />
         </ErrorBoundary>
         <ErrorBoundary>
           <Comments
