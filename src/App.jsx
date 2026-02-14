@@ -1472,7 +1472,7 @@ function Comments({ entityType = 'document', entityId, parentDocumentId = null, 
 
   const loadComments = useCallback(async () => {
     if (!entityId) return
-    const selectCols = 'id, author_id, content, source_language, translated_pl, translated_uk, translation_provider, created_at, updated_at, parent_comment_id, visible_to_sides, comment_scope, author:author_id(full_name, email, side)'
+    const selectCols = 'id, author_id, content, source_language, translated_pl, translated_uk, translation_provider, created_at, parent_comment_id, visible_to_sides, comment_scope, author:author_id(full_name, email, side)'
     let data = []
     let error = null
 
