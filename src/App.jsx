@@ -1494,8 +1494,9 @@ const CommentItem = ({ comment, depth, maxDepth, onReply, canComment }) => {
   const tone = getCommentAuthorTone(authorKey)
   const commentStyle = {
     marginLeft: depth * 16,
-    backgroundColor: tone.bg,
-    borderLeftColor: tone.border,
+    '--comment-bg': tone.bg,
+    '--comment-border': tone.border,
+    '--comment-accent': tone.accent,
   }
 
   return (
@@ -1511,11 +1512,15 @@ const CommentItem = ({ comment, depth, maxDepth, onReply, canComment }) => {
       </div>
       <div className="comment-bilingual">
         <div className="comment-line">
-          <span className="comment-lang">PL</span>
+          <span className="comment-lang comment-lang-flag" aria-label="Polski">
+            <span className="comment-flag" aria-hidden="true">🇵🇱</span>
+          </span>
           <p className="comment-content compact"><SafeText>{renderedPl}</SafeText></p>
         </div>
         <div className="comment-line">
-          <span className="comment-lang">UA</span>
+          <span className="comment-lang comment-lang-flag" aria-label="Українська">
+            <span className="comment-flag" aria-hidden="true">🇺🇦</span>
+          </span>
           <p className="comment-content compact"><SafeText>{renderedUk}</SafeText></p>
         </div>
       </div>

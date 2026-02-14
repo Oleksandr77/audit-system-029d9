@@ -2180,14 +2180,17 @@ body {
 }
 
 .comment {
-  background: #f9fafb;
+  background: var(--comment-bg, #f9fafb);
   padding: 0.75rem;
   border-radius: 8px;
-  border-left: 3px solid var(--primary);
+  border-left: 4px solid var(--comment-border, var(--primary));
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.05),
+    inset 0 0 0 1px rgba(15, 23, 42, 0.08);
 }
 
 .comment.reply {
-  border-left-color: #a0aec0;
+  border-left-color: var(--comment-border, #a0aec0);
 }
 
 .comment-header {
@@ -2227,12 +2230,22 @@ body {
   gap: 0.45rem;
 }
 .comment-lang {
-  font-size: 0.66rem;
+  font-size: 0.72rem;
   font-weight: 700;
   color: var(--text-muted);
   letter-spacing: 0.02em;
   text-transform: uppercase;
   padding-top: 0.12rem;
+}
+.comment-lang-flag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  padding-top: 0;
+}
+.comment-flag {
+  font-size: 1rem;
 }
 .comment-content.compact {
   font-size: 0.82rem;
