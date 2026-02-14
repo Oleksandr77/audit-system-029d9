@@ -308,7 +308,7 @@ async function parseFunctionsInvokeError(err) {
   return fallback
 }
 
-async function invokeGdriveImportWithAuthRetry(payload) {
+async function invokeFunctionWithAuthRetry(functionName, payload) {
   const readAccessToken = async () => {
     const { data: sessionData, error: sessionErr } = await supabase.auth.getSession()
     if (sessionErr) throw new Error(sessionErr.message || 'Failed to read auth session')
@@ -318,7 +318,7 @@ async function invokeGdriveImportWithAuthRetry(payload) {
   }
 
   let accessToken = await readAccessToken()
-  let result = await supabase.functions.invoke('gdrive-import', {
+  let result = await supabase.functions.invoke(functionName, {
     headers: { Authorization: `Bearer ${accessToken}` },
     body: payload,
   })
@@ -333,11 +333,15 @@ async function invokeGdriveImportWithAuthRetry(payload) {
   }
 
   accessToken = refreshed.session.access_token
-  result = await supabase.functions.invoke('gdrive-import', {
+  result = await supabase.functions.invoke(functionName, {
     headers: { Authorization: `Bearer ${accessToken}` },
     body: payload,
   })
   return result
+}
+
+async function invokeGdriveImportWithAuthRetry(payload) {
+  return invokeFunctionWithAuthRetry('gdrive-import', payload)
 }
 
 function makeTranslateCacheKey(text, source, target) {
@@ -1110,39 +1114,18 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView, canComment
         }
       }
 
-      const deleteFileRow = async () => {
-        const result = await supabase
-          .from('document_files')
-          .delete()
-          .eq('id', fileId)
-          .select('id,file_path')
-          .limit(1)
-        return result
+      const { data: resultData, error: invokeError } = await invokeFunctionWithAuthRetry('file-delete', {
+        file_id: fileId,
+        file_path: filePath,
+      })
+      if (invokeError || !resultData?.ok) {
+        const details = invokeError
+          ? await parseFunctionsInvokeError(invokeError)
+          : String(resultData?.error || resultData?.message || 'delete_failed')
+        throw new Error(details)
       }
-
-      let { data: deletedRows, error: deleteError } = await deleteFileRow()
-      let deletedRow = Array.isArray(deletedRows) ? deletedRows[0] : null
-
-      if (deleteError && /foreign key|constraint|violates/i.test(String(deleteError.message || ''))) {
-        await supabase.from('document_access').delete().eq('file_id', fileId)
-        await supabase.from('document_file_versions').delete().eq('file_id', fileId)
-        const retry = await deleteFileRow()
-        deletedRows = retry.data
-        deleteError = retry.error
-        deletedRow = Array.isArray(deletedRows) ? deletedRows[0] : null
-      }
-
-      if (deleteError) {
-        throw new Error(deleteError.message || 'delete_failed')
-      }
-      if (!deletedRow?.id) {
-        throw new Error('Delete failed (no row removed). Check permissions or file ownership.')
-      }
-
-      const storageTargetPath = deletedRow.file_path || filePath
-      const { error: storageError } = await supabase.storage.from('documents').remove([storageTargetPath])
-      if (storageError && !/not found/i.test(String(storageError.message || ''))) {
-        addToast(`Plik usunięty, ale storage cleanup failed: ${sanitizeText(storageError.message || 'cleanup_failed')}`, 'warning')
+      if (resultData?.storage_error) {
+        addToast(`Plik usunięty, ale storage cleanup failed: ${sanitizeText(String(resultData.storage_error))}`, 'warning')
       }
 
       await logAudit(profile.id, 'delete_file', 'document_file', fileId)
