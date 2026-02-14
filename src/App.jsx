@@ -398,26 +398,36 @@ async function llmTranslateStrict(text, source, target) {
   const cached = getCachedValue(translateCache, cacheKey, TRANSLATE_CACHE_TTL_MS)
   if (cached) return cached
 
-  return await callLlmWithRetry(async () => {
-    const { data, error } = await callWithTimeout(
-      supabase.functions.invoke('llm-translator', {
-        body: {
-          mode: 'translate',
-          source_language: source,
-          target_language: target,
-          text,
-          strict: true,
-          system_instruction: 'Professional native-level translation for audit/business context. Keep exact meaning, tone, names, dates, numbers and punctuation. No explanations, no notes, output translated text only.'
-        }
-      }),
-      TRANSLATION_TIMEOUT_MS
-    )
-    if (error) throw error
-    const translated = sanitizeText(data?.translated_text || '')
-    const finalValue = translated || text
-    setCachedValue(translateCache, cacheKey, finalValue)
-    return finalValue
-  }, text)
+  let lastError = null
+  for (let attempt = 0; attempt < LLM_MAX_RETRIES; attempt++) {
+    try {
+      const { data, error } = await callWithTimeout(
+        supabase.functions.invoke('llm-translator', {
+          body: {
+            mode: 'translate',
+            source_language: source,
+            target_language: target,
+            text,
+            strict: true,
+            system_instruction: 'Professional native-level translation for audit/business context. Keep exact meaning, tone, names, dates, numbers and punctuation. No explanations, no notes, output translated text only.'
+          }
+        }),
+        TRANSLATION_TIMEOUT_MS
+      )
+      if (error) throw error
+      const translated = sanitizeText(data?.translated_text || '')
+      if (!translated) throw new Error('empty_translation')
+      setCachedValue(translateCache, cacheKey, translated)
+      return translated
+    } catch (error) {
+      lastError = error
+      if (attempt < LLM_MAX_RETRIES - 1) {
+        const backoffMs = 250 * Math.pow(2, attempt)
+        await new Promise(resolve => setTimeout(resolve, backoffMs))
+      }
+    }
+  }
+  throw new Error(`translation_failed: ${String(lastError?.message || 'unknown_error')}`)
 }
 
 async function llmSuggestCompletions(prefix, language, context = '') {
@@ -1600,10 +1610,18 @@ function Comments({ entityType = 'document', entityId, parentDocumentId = null, 
     setSubmitting(true)
     const cleanContent = sanitizeText(newComment.trim())
     const sourceLanguage = detectLanguage(cleanContent)
-    const [translatedPl, translatedUk] = await Promise.all([
-      sourceLanguage === 'pl' ? Promise.resolve(cleanContent) : llmTranslateStrict(cleanContent, sourceLanguage, 'pl'),
-      sourceLanguage === 'uk' ? Promise.resolve(cleanContent) : llmTranslateStrict(cleanContent, sourceLanguage, 'uk')
-    ])
+    let translatedPl = cleanContent
+    let translatedUk = cleanContent
+    try {
+      ;[translatedPl, translatedUk] = await Promise.all([
+        sourceLanguage === 'pl' ? Promise.resolve(cleanContent) : llmTranslateStrict(cleanContent, sourceLanguage, 'pl'),
+        sourceLanguage === 'uk' ? Promise.resolve(cleanContent) : llmTranslateStrict(cleanContent, sourceLanguage, 'uk')
+      ])
+    } catch (translationError) {
+      addToast(`Translation failed: ${sanitizeText(String(translationError?.message || 'llm_unavailable'))}`, 'error')
+      setSubmitting(false)
+      return
+    }
     const replyTarget = comments.find(c => c.id === replyTo)
     const scope = replyTarget?.comment_scope || channel
     if (scope === 'auditor_channel' && !canUseAuditorChannel) {

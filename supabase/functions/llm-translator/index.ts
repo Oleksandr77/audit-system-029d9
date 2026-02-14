@@ -4,6 +4,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 type Language = "pl" | "uk";
 type Mode = "translate" | "suggest";
 type SupabaseClientLike = ReturnType<typeof createClient> | null;
+const TRANSLATE_RATE_LIMIT_ENABLED =
+  String(Deno.env.get("TRANSLATE_RATE_LIMIT_ENABLED") || "false").toLowerCase() === "true";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -236,9 +238,11 @@ serve(async (req) => {
         });
       }
 
-      const rateResult = await checkAndLogLlmRateLimit(supabase, mode);
-      if (!rateResult.allowed) {
-        return jsonResponse(429, { error: rateResult.error });
+      if (TRANSLATE_RATE_LIMIT_ENABLED) {
+        const rateResult = await checkAndLogLlmRateLimit(supabase, mode);
+        if (!rateResult.allowed) {
+          return jsonResponse(429, { error: rateResult.error });
+        }
       }
 
       const prompt =
