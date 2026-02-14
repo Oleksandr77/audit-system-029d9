@@ -340,12 +340,26 @@ async function invokeFunctionWithAuthRetry(functionName, payload) {
   return result
 }
 
+async function invokeFunctionWithSessionRetry(functionName, payload) {
+  let result = await supabase.functions.invoke(functionName, { body: payload })
+  if (!result.error) return result
+
+  const details = await parseFunctionsInvokeError(result.error)
+  if (!/invalid jwt/i.test(details)) return result
+
+  const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession()
+  if (refreshErr || !refreshed?.session?.access_token) return result
+
+  result = await supabase.functions.invoke(functionName, { body: payload })
+  return result
+}
+
 async function invokeGdriveImportWithAuthRetry(payload) {
   return invokeFunctionWithAuthRetry('gdrive-import', payload)
 }
 
 async function invokeLlmTranslatorWithAuthRetry(payload) {
-  return invokeFunctionWithAuthRetry('llm-translator', payload)
+  return invokeFunctionWithSessionRetry('llm-translator', payload)
 }
 
 function makeTranslateCacheKey(text, source, target) {
