@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext, Component } from 'react'
 import { supabase } from './lib/supabase'
+import JSZip from 'jszip'
 
 // =====================================================
 // CONSTANTS
@@ -162,6 +163,17 @@ function BiText({ pl, uk, className = '' }) {
   )
 }
 
+function GoogleDriveIcon({ className = '' }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+      <path d="M7.2 2.4h9.6l4.8 8.4h-9.6z" fill="#0f9d58" />
+      <path d="M2.4 10.8l4.8-8.4 4.8 8.4-4.8 8.4z" fill="#34a853" />
+      <path d="M12 19.2l4.8-8.4h9.6l-4.8 8.4z" fill="#fbbc04" transform="translate(-2.4 0)" />
+      <path d="M2.4 10.8h9.6l4.8 8.4h-9.6z" fill="#4285f4" />
+    </svg>
+  )
+}
+
 // =====================================================
 // SECURITY UTILITIES (Enhanced XSS Protection)
 // =====================================================
@@ -239,6 +251,57 @@ async function callWithTimeout(promise, timeoutMs) {
     promise,
     new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeoutMs))
   ])
+}
+
+async function parseFunctionsInvokeError(err) {
+  const fallback = String(err?.message || 'request_failed')
+  const context = err?.context
+  if (!context || typeof context.clone !== 'function') return fallback
+  try {
+    const jsonPayload = await context.clone().json().catch(() => null)
+    if (jsonPayload && typeof jsonPayload === 'object') {
+      const runId = jsonPayload?.run_id ? ` | run_id=${String(jsonPayload.run_id)}` : ''
+      const msg = jsonPayload?.error || jsonPayload?.message || jsonPayload?.msg
+      if (msg) return `${String(msg)}${runId}`
+    }
+  } catch {}
+  try {
+    const textPayload = await context.clone().text()
+    if (textPayload) return String(textPayload)
+  } catch {}
+  return fallback
+}
+
+async function invokeGdriveImportWithAuthRetry(payload) {
+  const readAccessToken = async () => {
+    const { data: sessionData, error: sessionErr } = await supabase.auth.getSession()
+    if (sessionErr) throw new Error(sessionErr.message || 'Failed to read auth session')
+    const token = sessionData?.session?.access_token
+    if (!token) throw new Error('No active auth session. Please sign in again.')
+    return token
+  }
+
+  let accessToken = await readAccessToken()
+  let result = await supabase.functions.invoke('gdrive-import', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: payload,
+  })
+  if (!result.error) return result
+
+  const details = await parseFunctionsInvokeError(result.error)
+  if (!/invalid jwt/i.test(details)) return result
+
+  const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession()
+  if (refreshErr || !refreshed?.session?.access_token) {
+    return result
+  }
+
+  accessToken = refreshed.session.access_token
+  result = await supabase.functions.invoke('gdrive-import', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: payload,
+  })
+  return result
 }
 
 function makeTranslateCacheKey(text, source, target) {
@@ -493,6 +556,7 @@ function Auth() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
+  const [oauthLoading, setOauthLoading] = useState('')
   const [error, setError] = useState('')
 
   const handleSubmit = async (e) => {
@@ -504,6 +568,22 @@ function Auth() {
       if (error) throw error
     } catch (err) { setError(err.message) }
     setLoading(false)
+  }
+
+  const handleOAuth = async (provider) => {
+    setError('')
+    setOauthLoading(provider)
+    try {
+      const redirectTo = `${window.location.origin}${window.location.pathname}`
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: { redirectTo }
+      })
+      if (error) throw error
+    } catch (err) {
+      setError(err.message || 'OAuth login failed')
+      setOauthLoading('')
+    }
   }
 
   return (
@@ -633,8 +713,29 @@ function Auth() {
             <input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email" />
             <input type="password" placeholder="Hasło / Пароль" value={password} onChange={e => setPassword(e.target.value)} required autoComplete="current-password" />
             {error && <div className="error" role="alert">{error}</div>}
-            <button type="submit" disabled={loading}>{loading ? '...' : 'Zaloguj / Увійти'}</button>
+            <button type="submit" className="auth-submit-btn" disabled={loading || Boolean(oauthLoading)}>
+              {loading ? '...' : 'Zaloguj / Увійти'}
+            </button>
           </form>
+          <div className="auth-separator"><span>lub / або</span></div>
+          <div className="auth-oauth-row">
+            <button
+              type="button"
+              className="auth-oauth-btn oauth-google"
+              onClick={() => handleOAuth('google')}
+              disabled={loading || Boolean(oauthLoading)}
+            >
+              {oauthLoading === 'google' ? 'Google...' : 'Sign in with Google'}
+            </button>
+            <button
+              type="button"
+              className="auth-oauth-btn oauth-facebook"
+              onClick={() => handleOAuth('facebook')}
+              disabled={loading || Boolean(oauthLoading)}
+            >
+              {oauthLoading === 'facebook' ? 'Facebook...' : 'Sign in with Facebook'}
+            </button>
+          </div>
           <div className="auth-privacy-note auth-privacy-desktop" role="note" aria-label="Privacy notice">
             <p className="note-title">Informacja o prywatnosci</p>
             <div className="privacy-line">
@@ -1297,7 +1398,7 @@ function FileUpload({ document, onUpdate, canAdd, canDelete, canView }) {
 // =====================================================
 // COMMENT ITEM COMPONENT (Memoized for performance)
 // =====================================================
-const CommentItem = ({ comment, depth, maxDepth, onReply, onToggleVisibility, canComment, canToggle, displayLanguage }) => {
+const CommentItem = ({ comment, depth, maxDepth, onReply, canComment, displayLanguage }) => {
   if (depth >= maxDepth) return null
   const renderedContent = resolveDisplayedText(comment, displayLanguage)
 
@@ -1315,11 +1416,6 @@ const CommentItem = ({ comment, depth, maxDepth, onReply, onToggleVisibility, ca
         {canComment && depth < maxDepth - 1 && (
           <button onClick={() => onReply(comment.id)} aria-label="Odpowiedz / Відповісти">↩️ Odpowiedz</button>
         )}
-        {canToggle && (
-          <button onClick={() => onToggleVisibility(comment.id, comment.visible_to_sides || [])}>
-            {visibleSidesHasAuditor(comment.visible_to_sides) ? '🔓 AUDITOR' : '🔒 FNU'}
-          </button>
-        )}
       </div>
     </div>
   )
@@ -1328,34 +1424,46 @@ const CommentItem = ({ comment, depth, maxDepth, onReply, onToggleVisibility, ca
 // =====================================================
 // COMMENTS COMPONENT
 // =====================================================
-function Comments({ document, canComment, canView, displayLanguage }) {
+function Comments({ entityType = 'document', entityId, canComment, canView, displayLanguage, title }) {
   const [comments, setComments] = useState([])
   const [newComment, setNewComment] = useState('')
   const [replyTo, setReplyTo] = useState(null)
   const [submitting, setSubmitting] = useState(false)
+  const [channel, setChannel] = useState('fnu_internal')
   const addToast = useToast()
   const profile = useProfile()
   const safeSetState = useSafeAsync()
   const MAX_REPLY_DEPTH = 5
   const resolvedDisplayLanguage = displayLanguage === 'pl' ? 'pl' : 'uk'
+  const isLawyerAdmin = profile?.role === 'lawyer_admin' || profile?.role === 'super_admin'
+  const isAuditor = normalizeSide(profile?.side) === SIDE_AUDITOR
+  const canUseAuditorChannel = isLawyerAdmin || isAuditor
+  const entityColumn = entityType === 'section' ? 'section_id' : 'document_id'
 
   const loadComments = useCallback(async () => {
-    if (!document?.id) return
-    const { data } = await supabase
+    if (!entityId) return
+    const { data, error } = await supabase
       .from('comments')
-      .select('*, author:author_id(full_name, email, side)')
-      .eq('document_id', document.id)
+      .select('id, author_id, content, source_language, translated_pl, translated_uk, translation_provider, created_at, updated_at, parent_comment_id, visible_to_sides, comment_scope, author:author_id(full_name, email, side)')
+      .eq(entityColumn, entityId)
       .order('created_at')
+    if (error) {
+      addToast('Comments schema is outdated. Run latest SQL migration.', 'error')
+      return
+    }
 
     const filtered = (data || []).filter(c => {
       if (profile?.role === 'super_admin') return true
-      if (!c.visible_to_sides) return true
-      return canSeeBySide(c.visible_to_sides, profile?.side)
+      if ((c.comment_scope || 'fnu_internal') === 'auditor_channel') return canUseAuditorChannel
+      return normalizeSide(profile?.side) === SIDE_FNU
     })
     safeSetState(setComments)(filtered)
-  }, [document?.id, profile, safeSetState])
+  }, [entityId, entityColumn, profile, safeSetState, canUseAuditorChannel, addToast])
 
   useEffect(() => { if (canView) loadComments() }, [canView, loadComments])
+  useEffect(() => {
+    if (isAuditor) setChannel('auditor_channel')
+  }, [isAuditor])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -1367,9 +1475,20 @@ function Comments({ document, canComment, canView, displayLanguage }) {
       sourceLanguage === 'pl' ? Promise.resolve(cleanContent) : llmTranslateStrict(cleanContent, sourceLanguage, 'pl'),
       sourceLanguage === 'uk' ? Promise.resolve(cleanContent) : llmTranslateStrict(cleanContent, sourceLanguage, 'uk')
     ])
+    const replyTarget = comments.find(c => c.id === replyTo)
+    const scope = replyTarget?.comment_scope || channel
+    if (scope === 'auditor_channel' && !canUseAuditorChannel) {
+      addToast('Auditor Q&A is available only for lawyer_admin and auditor.', 'error')
+      setSubmitting(false)
+      return
+    }
+    if (scope === 'fnu_internal' && normalizeSide(profile?.side) !== SIDE_FNU) {
+      addToast('Internal comments are available only for FNU users.', 'error')
+      setSubmitting(false)
+      return
+    }
 
-    const { data, error } = await supabase.from('comments').insert({
-      document_id: document.id,
+    const payload = {
       author_id: profile.id,
       content: cleanContent,
       source_language: sourceLanguage,
@@ -1377,8 +1496,12 @@ function Comments({ document, canComment, canView, displayLanguage }) {
       translated_uk: translatedUk,
       translation_provider: 'smart-api',
       parent_comment_id: replyTo,
-      visible_to_sides: normalizeSide(profile.side) === SIDE_FNU ? [SIDE_FNU] : [SIDE_FNU, SIDE_AUDITOR]
-    }).select().single()
+      comment_scope: scope,
+      visible_to_sides: scope === 'auditor_channel' ? [SIDE_AUDITOR] : [SIDE_FNU]
+    }
+    payload[entityColumn] = entityId
+
+    const { data, error } = await supabase.from('comments').insert(payload).select().single()
 
     if (!error && data) {
       await logAudit(profile.id, 'add_comment', 'comment', data.id)
@@ -1390,16 +1513,10 @@ function Comments({ document, canComment, canView, displayLanguage }) {
     setSubmitting(false)
   }
 
-  const toggleVisibility = async (commentId, currentSides) => {
-    const newSides = visibleSidesHasAuditor(currentSides) ? [SIDE_FNU] : [SIDE_FNU, SIDE_AUDITOR]
-    await supabase.from('comments').update({ visible_to_sides: newSides }).eq('id', commentId)
-    loadComments()
-    addToast('Widoczność zmieniona / Видимість змінено', 'success')
-  }
-
   if (!canView) return null
 
-  const topLevel = comments.filter(c => !c.parent_comment_id)
+  const visibleByChannel = comments.filter(c => (c.comment_scope || 'fnu_internal') === channel)
+  const topLevel = visibleByChannel.filter(c => !c.parent_comment_id)
   const getReplies = (parentId) => comments.filter(c => c.parent_comment_id === parentId)
 
   const renderCommentTree = (comment, depth = 0) => (
@@ -1409,9 +1526,7 @@ function Comments({ document, canComment, canView, displayLanguage }) {
         depth={depth}
         maxDepth={MAX_REPLY_DEPTH}
         onReply={setReplyTo}
-        onToggleVisibility={toggleVisibility}
         canComment={canComment}
-        canToggle={profile?.role === 'super_admin'}
         displayLanguage={resolvedDisplayLanguage}
       />
       {getReplies(comment.id).map(r => renderCommentTree(r, depth + 1))}
@@ -1420,7 +1535,27 @@ function Comments({ document, canComment, canView, displayLanguage }) {
 
   return (
     <section className="comments-section" aria-label="Komentarze / Коментарі">
-      <h4><BiText pl={`Komentarze (${comments.length})`} uk={`Коментарі (${comments.length})`} /></h4>
+      <h4><BiText pl={`${title || 'Komentarze'} (${visibleByChannel.length})`} uk={`${title || 'Коментарі'} (${visibleByChannel.length})`} /></h4>
+
+      <div className="comment-channel-switch">
+        <button
+          type="button"
+          className={channel === 'fnu_internal' ? 'active' : ''}
+          onClick={() => setChannel('fnu_internal')}
+          disabled={isAuditor}
+        >
+          FNU Internal
+        </button>
+        {canUseAuditorChannel && (
+          <button
+            type="button"
+            className={channel === 'auditor_channel' ? 'active' : ''}
+            onClick={() => setChannel('auditor_channel')}
+          >
+            Auditor Q&A
+          </button>
+        )}
+      </div>
 
       {canComment && (
         <form onSubmit={handleSubmit} className="comment-form">
@@ -1448,8 +1583,264 @@ function Comments({ document, canComment, canView, displayLanguage }) {
 
       <div className="comments-list" role="feed" aria-label="Lista komentarzy">
         {topLevel.map(c => renderCommentTree(c))}
-        {comments.length === 0 && <div className="no-comments"><BiText pl="Brak komentarzy" uk="Немає коментарів" /></div>}
+        {visibleByChannel.length === 0 && <div className="no-comments"><BiText pl="Brak komentarzy" uk="Немає коментарів" /></div>}
       </div>
+    </section>
+  )
+}
+
+function SectionCommentsModal({ section, onClose, displayLanguage, canComment }) {
+  const modalRef = useRef(null)
+  useFocusTrap(modalRef, true)
+  if (!section) return null
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div ref={modalRef} className="modal document-detail" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+        <div className="modal-header">
+          <h2>
+            <span>{section.code}.</span> <SafeText>{section.name_pl}</SafeText>
+          </h2>
+          <button className="close-btn" onClick={onClose} aria-label="Zamknij">✕</button>
+        </div>
+        <Comments
+          entityType="section"
+          entityId={section.id}
+          canComment={canComment}
+          canView={true}
+          displayLanguage={displayLanguage}
+          title="Folder comments / Коментарі папки"
+        />
+      </div>
+    </div>
+  )
+}
+
+function TaskBoard({ companyId, sectionId }) {
+  const profile = useProfile()
+  const addToast = useToast()
+  const [tasks, setTasks] = useState([])
+  const [taskMembers, setTaskMembers] = useState({})
+  const [lastMessages, setLastMessages] = useState({})
+  const [users, setUsers] = useState([])
+  const [selectedTaskId, setSelectedTaskId] = useState(null)
+  const [newTask, setNewTask] = useState({ topic: '', note: '' })
+  const [newComment, setNewComment] = useState('')
+  const [recipientMode, setRecipientMode] = useState('direct')
+  const [selectedDirectUserId, setSelectedDirectUserId] = useState('')
+  const [selectedRecipients, setSelectedRecipients] = useState([])
+  const isFnu = normalizeSide(profile?.side) === SIDE_FNU
+  const formatUserLabel = useCallback((user) => {
+    const roleLabel = ROLES[user?.role]?.uk || ROLES[user?.role]?.pl || user?.role || 'Користувач'
+    const rawName = (user?.full_name || '').trim()
+    const looksLikeEmail = /@/.test(rawName)
+    const nameLabel = rawName && !looksLikeEmail ? rawName : 'Невказане імʼя'
+    return `${roleLabel} · ${nameLabel}`
+  }, [])
+
+  const loadUsers = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, full_name, email, side, role')
+      .eq('is_active', true)
+      .eq('side', SIDE_FNU)
+      .neq('role', 'super_admin')
+      .neq('id', profile?.id || '')
+      .order('full_name')
+    if (!error) setUsers(data || [])
+  }, [profile?.id])
+
+  const loadTasks = useCallback(async () => {
+    if (!profile?.id || !companyId || !sectionId) return
+    const { data, error } = await supabase
+      .from('chat_thread_members')
+      .select(`
+        thread_id,
+        thread:thread_id (
+          id, topic, updated_at, created_at, is_archived, company_id, section_id
+        )
+      `)
+      .eq('user_id', profile.id)
+      .eq('is_active', true)
+    if (error) return
+    const taskThreads = (data || [])
+      .map(r => r.thread)
+      .filter(Boolean)
+      .filter(t => t.company_id === companyId && t.section_id === sectionId && (t.topic || '').startsWith('[TASK] '))
+      .sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0))
+    setTasks(taskThreads)
+    if (!selectedTaskId && taskThreads.length > 0) setSelectedTaskId(taskThreads[0].id)
+
+    const ids = taskThreads.map(t => t.id)
+    if (ids.length === 0) return
+    const [{ data: members }, { data: msgs }] = await Promise.all([
+      supabase.from('chat_thread_members').select('thread_id, user_id, user:user_id(id, full_name, email, side)').in('thread_id', ids).eq('is_active', true),
+      supabase.from('chat_messages').select('thread_id, content, created_at, sender:sender_id(full_name, email)').in('thread_id', ids).order('created_at', { ascending: false })
+    ])
+    const groupedMembers = (members || []).reduce((acc, item) => {
+      if (!acc[item.thread_id]) acc[item.thread_id] = []
+      acc[item.thread_id].push(item)
+      return acc
+    }, {})
+    setTaskMembers(groupedMembers)
+    const lastByThread = {}
+    for (const m of msgs || []) {
+      if (!lastByThread[m.thread_id]) lastByThread[m.thread_id] = m
+    }
+    setLastMessages(lastByThread)
+  }, [profile?.id, companyId, sectionId, selectedTaskId])
+
+  useEffect(() => { if (isFnu) loadUsers() }, [isFnu, loadUsers])
+  useEffect(() => { if (isFnu) loadTasks() }, [isFnu, loadTasks])
+  useEffect(() => {
+    if (recipientMode === 'direct') setSelectedRecipients(selectedDirectUserId ? [selectedDirectUserId] : [])
+  }, [recipientMode, selectedDirectUserId])
+
+  const toggleRecipient = (id) => {
+    setSelectedRecipients(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
+
+  const createTask = async (e) => {
+    e.preventDefault()
+    const recipients = (recipientMode === 'group' ? selectedRecipients : [selectedDirectUserId]).filter(isValidUUID)
+    if (!newTask.topic.trim() || recipients.length === 0 || !companyId || !sectionId) return
+    const { data: thread, error: threadError } = await supabase
+      .from('chat_threads')
+      .insert({
+        topic: `[TASK] ${sanitizeText(newTask.topic.trim())}`,
+        company_id: companyId,
+        section_id: sectionId,
+        created_by: profile.id,
+        is_archived: false
+      })
+      .select()
+      .single()
+    if (threadError || !thread?.id) {
+      addToast('Task create failed', 'error')
+      return
+    }
+    const members = [profile.id, ...Array.from(new Set(recipients))].map((userId) => ({
+      thread_id: thread.id,
+      user_id: userId,
+      member_role: userId === profile.id ? 'owner' : 'member',
+      is_active: true
+    }))
+    await supabase.from('chat_thread_members').insert(members)
+    if (newTask.note.trim()) {
+      await supabase.from('chat_messages').insert({
+        thread_id: thread.id,
+        sender_id: profile.id,
+        content: sanitizeText(newTask.note.trim()),
+        source_language: detectLanguage(newTask.note.trim())
+      })
+    }
+    setNewTask({ topic: '', note: '' })
+    setSelectedDirectUserId('')
+    setSelectedRecipients([])
+    setRecipientMode('direct')
+    await loadTasks()
+    setSelectedTaskId(thread.id)
+    addToast('Task published', 'success')
+  }
+
+  const markDone = async (taskId, done) => {
+    await supabase.from('chat_threads').update({ is_archived: done }).eq('id', taskId)
+    await loadTasks()
+  }
+
+  const addTaskComment = async (e) => {
+    e.preventDefault()
+    if (!selectedTaskId || !newComment.trim()) return
+    const text = sanitizeText(newComment.trim())
+    await supabase.from('chat_messages').insert({
+      thread_id: selectedTaskId,
+      sender_id: profile.id,
+      content: text,
+      source_language: detectLanguage(text)
+    })
+    setNewComment('')
+    await loadTasks()
+  }
+
+  if (!isFnu) return null
+
+  return (
+    <section className="task-board" aria-label="FNU Task Board">
+      <h3><BiText pl="Tablica zadań FNU" uk="Дошка завдань FNU" /></h3>
+      <form className="task-create-form" onSubmit={createTask}>
+        <input
+          value={newTask.topic}
+          onChange={e => setNewTask(prev => ({ ...prev, topic: e.target.value }))}
+          placeholder="Temat zadania / питання"
+          maxLength={120}
+          required
+        />
+        <textarea
+          value={newTask.note}
+          onChange={e => setNewTask(prev => ({ ...prev, note: e.target.value }))}
+          placeholder="Opis (opcjonalnie) / Опис (необов'язково)"
+          rows={2}
+        />
+        <div className="task-recipient-row">
+          <select value={recipientMode} onChange={e => setRecipientMode(e.target.value)}>
+            <option value="direct">Direct / Прямо</option>
+            <option value="group">Group / Група</option>
+          </select>
+          {recipientMode === 'direct' ? (
+            <select value={selectedDirectUserId} onChange={e => setSelectedDirectUserId(e.target.value)}>
+              <option value="" disabled hidden>Wybierz użytkownika / Виберіть користувача</option>
+              {users.map(u => <option key={u.id} value={u.id}>{formatUserLabel(u)}</option>)}
+            </select>
+          ) : (
+            <div className="task-group-list">
+              {users.map(u => (
+                <label key={u.id}>
+                  <input type="checkbox" checked={selectedRecipients.includes(u.id)} onChange={() => toggleRecipient(u.id)} />
+                  <span><SafeText>{formatUserLabel(u)}</SafeText></span>
+                </label>
+              ))}
+            </div>
+          )}
+          <button type="submit"><BiText pl="Opublikuj" uk="Опублікувати" /></button>
+        </div>
+      </form>
+
+      <div className="task-list">
+        {tasks.map(task => {
+          const members = taskMembers[task.id] || []
+          const last = lastMessages[task.id]
+          const isDone = !!task.is_archived
+          return (
+            <article key={task.id} className={`task-card ${selectedTaskId === task.id ? 'active' : ''}`} onClick={() => setSelectedTaskId(task.id)}>
+              <header>
+                <strong><SafeText>{(task.topic || '').replace('[TASK] ', '')}</SafeText></strong>
+                <span className={`task-status ${isDone ? 'done' : 'open'}`}>
+                  {isDone ? 'Done / Виконано' : 'Open / Відкрите'}
+                </span>
+              </header>
+              <p className="task-meta">{members.length} users / користувачів</p>
+              {last && (
+                <p className="task-last">
+                  <SafeText>{last.sender?.full_name || 'Користувач'}:</SafeText> <SafeText>{String(last.content || '').slice(0, 70)}</SafeText>
+                </p>
+              )}
+              <div className="task-actions">
+                <button type="button" onClick={(e) => { e.stopPropagation(); markDone(task.id, !isDone) }}>
+                  {isDone ? 'Reopen / Відкрити знову' : 'Mark done / Виконано'}
+                </button>
+              </div>
+            </article>
+          )
+        })}
+        {tasks.length === 0 && <div className="no-comments">Brak zadań w tej sekcji / Немає завдань у цій секції.</div>}
+      </div>
+
+      {selectedTaskId && (
+        <form className="task-comment-form" onSubmit={addTaskComment}>
+          <input value={newComment} onChange={e => setNewComment(e.target.value)} placeholder="Dodaj komentarz / pytanie... / Додайте коментар / питання..." />
+          <button type="submit"><BiText pl="Komentarz" uk="Коментар" /></button>
+        </form>
+      )}
     </section>
   )
 }
@@ -2134,9 +2525,13 @@ function Chat({
 // =====================================================
 function UserManagement({ onClose }) {
   const [users, setUsers] = useState([])
+  const [invites, setInvites] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadingInvites, setLoadingInvites] = useState(false)
   const [newUser, setNewUser] = useState({ email: '', password: '', full_name: '', phone: '', position: '', company_name: '', role: 'user_fnu', side: 'FNU' })
+  const [inviteForm, setInviteForm] = useState({ email: '', role: 'user_fnu', side: SIDE_FNU, expires_hours: 24 })
   const [creating, setCreating] = useState(false)
+  const [sendingInvite, setSendingInvite] = useState(false)
   const modalRef = useRef(null)
   const addToast = useToast()
   const profile = useProfile()
@@ -2152,6 +2547,24 @@ function UserManagement({ onClose }) {
     }
     loadUsers()
   }, [safeSetState])
+
+  const loadInvites = useCallback(async () => {
+    safeSetState(setLoadingInvites)(true)
+    const { data, error } = await supabase.functions.invoke('invite-user', {
+      body: { action: 'list' }
+    })
+    if (error || !data?.ok) {
+      addToast(`Błąd invite list: ${sanitizeText(error?.message || data?.error || 'invite_list_failed')}`, 'error')
+      safeSetState(setLoadingInvites)(false)
+      return
+    }
+    safeSetState(setInvites)(Array.isArray(data.invites) ? data.invites : [])
+    safeSetState(setLoadingInvites)(false)
+  }, [addToast, safeSetState])
+
+  useEffect(() => {
+    loadInvites()
+  }, [loadInvites])
 
   const createUser = async (e) => {
     e.preventDefault()
@@ -2227,6 +2640,58 @@ function UserManagement({ onClose }) {
     addToast('Zaktualizowano / Оновлено', 'success')
   }
 
+  const sendInvite = async (e) => {
+    e.preventDefault()
+    if (!inviteForm.email.trim()) return
+    setSendingInvite(true)
+    try {
+      const payload = {
+        action: 'send',
+        email: inviteForm.email.trim().toLowerCase(),
+        role: inviteForm.role,
+        side: normalizeSide(inviteForm.side),
+        expires_hours: Number(inviteForm.expires_hours || 24)
+      }
+      const { data, error } = await supabase.functions.invoke('invite-user', { body: payload })
+      if (error || !data?.ok) throw new Error(error?.message || data?.error || 'invite_send_failed')
+      setInviteForm({ email: '', role: 'user_fnu', side: SIDE_FNU, expires_hours: 24 })
+      addToast('Zaproszenie wysłane / Запрошення надіслано', 'success')
+      await loadInvites()
+    } catch (err) {
+      addToast(`Błąd invite: ${sanitizeText(err?.message || 'invite_send_failed')}`, 'error')
+    } finally {
+      setSendingInvite(false)
+    }
+  }
+
+  const resendInvite = async (inviteId) => {
+    if (!inviteId) return
+    try {
+      const { data, error } = await supabase.functions.invoke('invite-user', {
+        body: { action: 'resend', invite_id: inviteId }
+      })
+      if (error || !data?.ok) throw new Error(error?.message || data?.error || 'invite_resend_failed')
+      addToast('Zaproszenie wysłane ponownie / Запрошення відправлено повторно', 'success')
+      await loadInvites()
+    } catch (err) {
+      addToast(`Błąd resend: ${sanitizeText(err?.message || 'invite_resend_failed')}`, 'error')
+    }
+  }
+
+  const revokeInvite = async (inviteId) => {
+    if (!inviteId) return
+    try {
+      const { data, error } = await supabase.functions.invoke('invite-user', {
+        body: { action: 'revoke', invite_id: inviteId }
+      })
+      if (error || !data?.ok) throw new Error(error?.message || data?.error || 'invite_revoke_failed')
+      addToast('Zaproszenie cofnięte / Запрошення відкликано', 'warning')
+      await loadInvites()
+    } catch (err) {
+      addToast(`Błąd revoke: ${sanitizeText(err?.message || 'invite_revoke_failed')}`, 'error')
+    }
+  }
+
   if (loading) return <div className="loading">Ładowanie... / Завантаження...</div>
 
   return (
@@ -2238,6 +2703,81 @@ function UserManagement({ onClose }) {
         </div>
 
         <div className="modal-body">
+          <div className="add-user-section">
+            <h4><BiText pl="Invite-only onboarding (email link)" uk="Запрошення через email-посилання" /></h4>
+            <form onSubmit={sendInvite} className="user-form">
+              <div className="form-grid">
+                <input
+                  placeholder="Email zaproszenia / Email запрошення"
+                  type="email"
+                  value={inviteForm.email}
+                  onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })}
+                  required
+                  aria-label="Email zaproszenia"
+                />
+                <select value={inviteForm.side} onChange={e => setInviteForm({ ...inviteForm, side: e.target.value })} aria-label="Strona invite">
+                  {Object.entries(SIDES).map(([k, v]) => <option key={k} value={k}>{v.pl}</option>)}
+                </select>
+                <select value={inviteForm.role} onChange={e => setInviteForm({ ...inviteForm, role: e.target.value })} aria-label="Rola invite">
+                  {Object.entries(ROLES).map(([k, v]) => <option key={k} value={k}>{v.pl}</option>)}
+                </select>
+                <input
+                  type="number"
+                  min="1"
+                  max="168"
+                  value={inviteForm.expires_hours}
+                  onChange={e => setInviteForm({ ...inviteForm, expires_hours: Number(e.target.value || 24) })}
+                  aria-label="Wygasa za godzin"
+                  placeholder="Expires hours"
+                />
+              </div>
+              <button type="submit" className="btn-primary" disabled={sendingInvite}>
+                {sendingInvite ? '...' : 'Wyślij invite / Надіслати invite'}
+              </button>
+            </form>
+            <div className="users-table-container" style={{ marginTop: 12 }}>
+              <h4><BiText pl={`Zaproszenia (${invites.length})`} uk={`Запрошення (${invites.length})`} /></h4>
+              {loadingInvites ? <div className="loading">...</div> : (
+                <table className="users-table" aria-label="Lista zaproszeń">
+                  <thead>
+                    <tr>
+                      <th scope="col">Email</th>
+                      <th scope="col">Rola</th>
+                      <th scope="col">Strona</th>
+                      <th scope="col">Status</th>
+                      <th scope="col">Wygasa</th>
+                      <th scope="col">Akcje</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invites.map(inv => (
+                      <tr key={inv.id}>
+                        <td>{inv.email}</td>
+                        <td>{ROLES[inv.role]?.pl || inv.role}</td>
+                        <td>{formatSideLabel(inv.side)}</td>
+                        <td>{inv.invite_status}</td>
+                        <td>{inv.expires_at ? new Date(inv.expires_at).toLocaleString() : '—'}</td>
+                        <td>
+                          <button onClick={() => resendInvite(inv.id)} className="btn-success" disabled={inv.invite_status === 'revoked'} aria-label="Resend invite">
+                            ↻
+                          </button>
+                          <button onClick={() => revokeInvite(inv.id)} className="btn-danger" disabled={inv.invite_status === 'revoked'} aria-label="Revoke invite">
+                            ✕
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {!invites.length && (
+                      <tr>
+                        <td colSpan="6">Brak zaproszeń / Немає запрошень</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+
           <div className="add-user-section">
             <h4><BiText pl="Nowy użytkownik" uk="Новий користувач" /></h4>
             <form onSubmit={createUser} className="user-form">
@@ -2373,7 +2913,10 @@ function AuditLog({ onClose }) {
     'update_status': '🔄 Zmiana statusu',
     'add_comment': '💬 Dodanie komentarza',
     'create_user': '👤 Utworzenie użytkownika',
-    'update_user': '✏️ Aktualizacja użytkownika'
+    'update_user': '✏️ Aktualizacja użytkownika',
+    'invite_send': '✉️ Wysłanie zaproszenia',
+    'invite_resend': '🔁 Ponowne wysłanie zaproszenia',
+    'invite_revoke': '⛔ Cofnięcie zaproszenia'
   }
 
   const filtered = useMemo(() => {
@@ -2425,7 +2968,7 @@ function AuditLog({ onClose }) {
 // =====================================================
 // DOCUMENT DETAIL MODAL
 // =====================================================
-function DocumentDetail({ document, onClose, onUpdate, displayLanguage }) {
+function DocumentDetail({ document, onClose, onUpdate, displayLanguage, permissions }) {
   const [doc, setDoc] = useState(document)
   const [users, setUsers] = useState([])
   const modalRef = useRef(null)
@@ -2435,9 +2978,9 @@ function DocumentDetail({ document, onClose, onUpdate, displayLanguage }) {
 
   const isSuperAdmin = profile?.role === 'super_admin'
   const isAdmin = isSuperAdmin || profile?.role === 'lawyer_admin'
-  const canAdd = isAdmin || profile?.side === 'FNU'
-  const canDelete = isAdmin
-  const canComment = true
+  const canAdd = isAdmin || Boolean(permissions?.can_upload)
+  const canDelete = isAdmin || Boolean(permissions?.can_manage)
+  const canComment = isAdmin || Boolean(permissions?.can_comment)
   const canView = true
 
   useFocusTrap(modalRef, true)
@@ -2502,7 +3045,14 @@ function DocumentDetail({ document, onClose, onUpdate, displayLanguage }) {
             <FileUpload document={doc} onUpdate={onUpdate} canAdd={canAdd} canDelete={canDelete} canView={canView} />
           </ErrorBoundary>
           <ErrorBoundary>
-            <Comments document={doc} canComment={canComment} canView={canView} displayLanguage={displayLanguage} />
+            <Comments
+              entityType="document"
+              entityId={doc.id}
+              canComment={canComment}
+              canView={canView}
+              displayLanguage={displayLanguage}
+              title="Document comments / Коментарі документа"
+            />
           </ErrorBoundary>
         </div>
       </div>
@@ -2513,7 +3063,7 @@ function DocumentDetail({ document, onClose, onUpdate, displayLanguage }) {
 // =====================================================
 // SECTION MANAGER
 // =====================================================
-function SectionManager({ company, sections, onUpdate, onClose }) {
+function SectionManager({ company, sections, onUpdate, onClose, canManageMain }) {
   const [newSection, setNewSection] = useState({ code: getNextSectionCode(sections), name_pl: '', name_uk: '' })
   const [parentSectionId, setParentSectionId] = useState('')
   const [allSections, setAllSections] = useState([])
@@ -2542,6 +3092,10 @@ function SectionManager({ company, sections, onUpdate, onClose }) {
 
   const createSection = async (e) => {
     e.preventDefault()
+    if (!canManageMain && !parentSectionId) {
+      addToast('Only admin can create root folders. Choose parent folder.', 'warning')
+      return
+    }
     setCreating(true)
     const { error } = await supabase.from('document_sections').insert({
       company_id: company.id,
@@ -2563,6 +3117,11 @@ function SectionManager({ company, sections, onUpdate, onClose }) {
   }
 
   const deleteSection = async (sectionId) => {
+    const section = (allSections.length ? allSections : sections).find((s) => s.id === sectionId)
+    if (!canManageMain && !section?.parent_section_id) {
+      addToast('Only admin can delete root folders.', 'error')
+      return
+    }
     if (!confirm('Usunąć sekcję? / Видалити розділ?')) return
     await supabase.from('document_sections').delete().eq('id', sectionId)
     onUpdate()
@@ -2582,7 +3141,7 @@ function SectionManager({ company, sections, onUpdate, onClose }) {
             <input placeholder="Nazwa (PL)" value={newSection.name_pl} onChange={e => setNewSection({...newSection, name_pl: e.target.value})} required aria-label="Nazwa polska" />
             <input placeholder="Назва (UK)" value={newSection.name_uk} onChange={e => setNewSection({...newSection, name_uk: e.target.value})} required aria-label="Nazwa ukraińska" />
             <select value={parentSectionId} onChange={e => setParentSectionId(e.target.value)} aria-label="Sekcja nadrzędna">
-              <option value="">Folder główny / Головна папка</option>
+              <option value="">{canManageMain ? 'Folder główny / Головна папка' : 'Wymagana папка nadrzędna / Потрібна батьківська папка'}</option>
               {(allSections || []).map(s => (
                 <option key={s.id} value={s.id}>{s.code} {s.name_pl}</option>
               ))}
@@ -2725,13 +3284,13 @@ function SmartInbox({ documents, profile }) {
   )
 }
 
-function InlineDocumentDrawer({ document, onUpdate, displayLanguage }) {
+function InlineDocumentDrawer({ document, onUpdate, displayLanguage, permissions }) {
   const profile = useProfile()
   const isSuperAdmin = profile?.role === 'super_admin'
   const isAdmin = isSuperAdmin || profile?.role === 'lawyer_admin'
-  const canAdd = isAdmin || profile?.side === 'FNU'
-  const canDelete = isAdmin
-  const canComment = true
+  const canAdd = isAdmin || Boolean(permissions?.can_upload)
+  const canDelete = isAdmin || Boolean(permissions?.can_manage)
+  const canComment = isAdmin || Boolean(permissions?.can_comment)
   const canView = true
 
   return (
@@ -2746,7 +3305,14 @@ function InlineDocumentDrawer({ document, onUpdate, displayLanguage }) {
           <FileUpload document={document} onUpdate={onUpdate} canAdd={canAdd} canDelete={canDelete} canView={canView} />
         </ErrorBoundary>
         <ErrorBoundary>
-          <Comments document={document} canComment={canComment} canView={canView} displayLanguage={displayLanguage} />
+          <Comments
+            entityType="document"
+            entityId={document.id}
+            canComment={canComment}
+            canView={canView}
+            displayLanguage={displayLanguage}
+            title="Document comments / Коментарі документа"
+          />
         </ErrorBoundary>
       </div>
     </div>
@@ -2759,6 +3325,7 @@ function InlineDocumentDrawer({ document, onUpdate, displayLanguage }) {
 function AppContent() {
   const [session, setSession] = useState(null)
   const [profile, setProfile] = useState(null)
+  const [authError, setAuthError] = useState('')
   const [loading, setLoading] = useState(true)
   const [companies, setCompanies] = useState([])
   const [selectedCompany, setSelectedCompany] = useState(null)
@@ -2770,37 +3337,62 @@ function AppContent() {
   const [showUserManagement, setShowUserManagement] = useState(false)
   const [showAuditLog, setShowAuditLog] = useState(false)
   const [showSectionManager, setShowSectionManager] = useState(false)
+  const [showSectionComments, setShowSectionComments] = useState(false)
   const [docSearch, setDocSearch] = useState('')
   const [docStatusFilter, setDocStatusFilter] = useState('all')
   const [docFileStats, setDocFileStats] = useState({})
+  const [folderAclRows, setFolderAclRows] = useState([])
+  const [auditAppId, setAuditAppId] = useState('')
+  const [sectionToolsBusy, setSectionToolsBusy] = useState(false)
   const [newDocument, setNewDocument] = useState({ code: '', name_pl: '', name_uk: '' })
   const [creatingDocument, setCreatingDocument] = useState(false)
-  const [chatLanguageMode, setChatLanguageMode] = useState(() => {
-    if (typeof window === 'undefined') return 'auto'
-    const cached = window.localStorage.getItem('chat_display_language')
-    return LANGUAGE_MODES.includes(cached) ? cached : 'auto'
-  })
-  const [chatContextSeed, setChatContextSeed] = useState(null)
-  const [chatInitialDraft, setChatInitialDraft] = useState('')
   const addToast = useToast()
   const safeSetState = useSafeAsync()
+  const isSuperAdmin = profile?.role === 'super_admin'
+  const isAdmin = isSuperAdmin || profile?.role === 'lawyer_admin'
+  const aclBySection = useMemo(() => {
+    const map = new Map()
+    for (const row of folderAclRows || []) {
+      if (row?.section_id) map.set(row.section_id, row)
+    }
+    return map
+  }, [folderAclRows])
+  const aclEnabledForUser = !isAdmin && normalizeSide(profile?.side) === SIDE_FNU && folderAclRows.length > 0
+  const currentSectionAcl = activeSection?.id ? aclBySection.get(activeSection.id) : null
+  const canViewCurrentSection = isAdmin || !aclEnabledForUser || Boolean(currentSectionAcl?.can_view)
+  const canCommentCurrentSection = isAdmin || !aclEnabledForUser || Boolean(currentSectionAcl?.can_comment)
+  const canUploadCurrentSection = isAdmin || !aclEnabledForUser || Boolean(currentSectionAcl?.can_upload)
+  const canManageCurrentSection = isAdmin || !aclEnabledForUser || Boolean(currentSectionAcl?.can_manage)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session)
-      if (data.session) loadProfile(data.session.user.id)
+      if (data.session) {
+        supabase.functions.invoke('invite-user', { body: { action: 'accept' } }).catch(() => {})
+        loadProfile(data.session.user.id)
+      }
       else setLoading(false)
     })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => {
       setSession(session)
-      if (session) loadProfile(session.user.id)
+      if (session) {
+        supabase.functions.invoke('invite-user', { body: { action: 'accept' } }).catch(() => {})
+        loadProfile(session.user.id)
+      }
       else { setProfile(null); setLoading(false) }
     })
     return () => subscription?.unsubscribe()
   }, [])
 
   const loadProfile = async (userId) => {
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
+    const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single()
+    if (error || !data) {
+      safeSetState(setProfile)(null)
+      safeSetState(setAuthError)('Access denied: your account is not provisioned in profiles.')
+      safeSetState(setLoading)(false)
+      return
+    }
+    safeSetState(setAuthError)('')
     safeSetState(setProfile)(data)
     loadCompanies()
   }
@@ -2812,17 +3404,61 @@ function AppContent() {
     safeSetState(setLoading)(false)
   }
 
+  const loadAuditAppId = useCallback(async () => {
+    const { data } = await supabase.from('tw_apps').select('id,slug').eq('slug', 'audit').limit(1)
+    const row = Array.isArray(data) ? data[0] : null
+    setAuditAppId(row?.id || '')
+  }, [])
+
+  const loadFolderAcl = useCallback(async () => {
+    if (!profile?.id || !auditAppId) {
+      setFolderAclRows([])
+      return
+    }
+    if (profile.role === 'super_admin' || profile.role === 'lawyer_admin') {
+      setFolderAclRows([])
+      return
+    }
+    const { data } = await supabase
+      .from('tw_folder_acl')
+      .select('id,section_id,can_view,can_comment,can_upload,can_manage')
+      .eq('user_id', profile.id)
+      .eq('app_id', auditAppId)
+    setFolderAclRows(Array.isArray(data) ? data : [])
+  }, [profile?.id, profile?.role, auditAppId])
+
   const loadSections = useCallback(async () => {
     if (!selectedCompany) return
     const { data } = await supabase.from('document_sections').select('*').eq('company_id', selectedCompany.id).is('parent_section_id', null).order('order_index')
-    safeSetState(setSections)(data || [])
-    if (data?.length > 0 && !activeSection) safeSetState(setActiveSection)(data[0])
-  }, [selectedCompany, activeSection, safeSetState])
+    const all = data || []
+    const visible = aclEnabledForUser
+      ? all.filter((s) => Boolean(aclBySection.get(s.id)?.can_view))
+      : all
+    safeSetState(setSections)(visible)
+    if (visible?.length > 0 && !activeSection) safeSetState(setActiveSection)(visible[0])
+  }, [selectedCompany, activeSection, safeSetState, aclEnabledForUser, aclBySection])
 
   useEffect(() => { if (selectedCompany) loadSections() }, [selectedCompany, loadSections])
+  useEffect(() => { loadAuditAppId() }, [loadAuditAppId])
+  useEffect(() => { loadFolderAcl() }, [loadFolderAcl])
+  useEffect(() => {
+    if (!activeSection?.id) return
+    if (!sections.some((s) => s.id === activeSection.id)) {
+      setActiveSection(sections[0] || null)
+    }
+  }, [sections, activeSection?.id])
 
   const loadDocuments = useCallback(async () => {
     if (!activeSection) return
+    const enforceAcl = profile?.role !== 'super_admin' && profile?.role !== 'lawyer_admin' && normalizeSide(profile?.side) === SIDE_FNU && folderAclRows.length > 0
+    if (enforceAcl) {
+      const acl = folderAclRows.find((r) => r.section_id === activeSection.id)
+      if (!acl?.can_view) {
+        safeSetState(setDocuments)([])
+        safeSetState(setDocFileStats)({})
+        return
+      }
+    }
     const { data: subSections } = await supabase.from('document_sections').select('id').eq('parent_section_id', activeSection.id)
     const sectionIds = [activeSection.id, ...(subSections || []).map(s => s.id)]
 
@@ -2867,15 +3503,9 @@ function AppContent() {
       if (created && new Date(created) >= startOfDay) stats[docId].newToday += 1
     })
     safeSetState(setDocFileStats)(stats)
-  }, [activeSection, safeSetState])
+  }, [activeSection, safeSetState, folderAclRows, profile?.role, profile?.side])
 
   useEffect(() => { if (activeSection) loadDocuments() }, [activeSection, loadDocuments])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    if (!LANGUAGE_MODES.includes(chatLanguageMode)) return
-    window.localStorage.setItem('chat_display_language', chatLanguageMode)
-  }, [chatLanguageMode])
 
   const updateStatus = async (docId, status) => {
     if (!isValidUUID(docId)) return
@@ -2886,7 +3516,7 @@ function AppContent() {
 
   const createDocument = async (e) => {
     e.preventDefault()
-    if (!activeSection?.id) return
+    if (!activeSection?.id || !canManageCurrentSection) return
     setCreatingDocument(true)
     try {
       const payload = {
@@ -2913,10 +3543,16 @@ function AppContent() {
 
   if (loading) return <div className="loading" role="status" aria-live="polite">Ładowanie... / Завантаження...</div>
   if (!session) return <Auth />
+  if (authError) {
+    return (
+      <div className="loading" role="alert">
+        <p>{authError}</p>
+        <button onClick={() => supabase.auth.signOut()}>Sign out</button>
+      </div>
+    )
+  }
   if (!profile) return <div className="loading" role="status" aria-live="polite">Ładowanie profilu... / Завантаження профілю...</div>
 
-  const isSuperAdmin = profile.role === 'super_admin'
-  const isAdmin = isSuperAdmin || profile.role === 'lawyer_admin'
   const q = docSearch.trim().toLowerCase()
   const filteredDocuments = documents.filter(doc => {
     const byStatus = docStatusFilter === 'all' ? true : (doc.status || 'pending') === docStatusFilter
@@ -2935,20 +3571,153 @@ function AppContent() {
     return acc
   }, { total: 0, newToday: 0 })
 
-  const startDiscussionFromDocument = (doc) => {
-    if (!doc?.id || !selectedCompany?.id || !activeSection?.id) return
-    const topic = `${doc.code} ${doc.name_pl}`
-    setChatContextSeed({
-      companyId: selectedCompany.id,
-      sectionId: activeSection.id,
-      documentId: doc.id,
-      topic
-    })
-    setChatInitialDraft(`Pytanie dot. ${doc.code} / Питання щодо ${doc.code}: `)
-  }
-
   const toggleDocumentDrawer = (docId) => {
     setExpandedDocId(prev => (prev === docId ? null : docId))
+  }
+
+  const downloadSectionArchive = async () => {
+    if (!activeSection?.id) return
+    setSectionToolsBusy(true)
+    try {
+      const { data: subSections } = await supabase.from('document_sections').select('id,code,name_pl').eq('parent_section_id', activeSection.id)
+      const sectionIds = [activeSection.id, ...(subSections || []).map((s) => s.id)]
+      const { data: docs } = await supabase
+        .from('documents')
+        .select('id,code,name_pl,section_id')
+        .in('section_id', sectionIds)
+        .order('order_index')
+      const docIds = (docs || []).map((d) => d.id)
+      if (!docIds.length) {
+        addToast('No documents to export in this section.', 'warning')
+        setSectionToolsBusy(false)
+        return
+      }
+      const { data: files } = await supabase
+        .from('document_files')
+        .select('id,document_id,file_name,file_path')
+        .in('document_id', docIds)
+      if (!files?.length) {
+        addToast('No files to export in this section.', 'warning')
+        setSectionToolsBusy(false)
+        return
+      }
+
+      const sectionMap = new Map([[activeSection.id, `${activeSection.code} ${activeSection.name_pl}`], ...((subSections || []).map((s) => [s.id, `${s.code} ${s.name_pl}`]))])
+      const docMap = new Map((docs || []).map((d) => [d.id, d]))
+      const zip = new JSZip()
+      for (const file of files) {
+        const doc = docMap.get(file.document_id)
+        if (!doc) continue
+        const { data: blob, error } = await supabase.storage.from('documents').download(file.file_path)
+        if (error || !blob) continue
+        const folderName = sectionMap.get(doc.section_id) || 'Section'
+        const docFolder = `${folderName}/${doc.code || 'DOC'} ${doc.name_pl || 'Document'}`
+        zip.folder(docFolder)?.file(file.file_name || 'file.bin', blob)
+      }
+      const zipped = await zip.generateAsync({ type: 'blob' })
+      const url = URL.createObjectURL(zipped)
+      const a = window.document.createElement('a')
+      a.href = url
+      a.download = `${activeSection.code || 'section'}-archive.zip`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 15000)
+      addToast('Section archive prepared.', 'success')
+    } catch (e) {
+      addToast(`Archive error: ${sanitizeText(e?.message || 'failed')}`, 'error')
+    }
+    setSectionToolsBusy(false)
+  }
+
+  const importGoogleDriveForDocument = async (doc) => {
+    if (!doc?.id || !doc?.section_id || !selectedCompany?.id) return
+    const sourceUrl = window.prompt('Google Drive file URL or file ID:')
+    if (!sourceUrl) return
+    if (/\/folders\//i.test(sourceUrl)) {
+      addToast('Only file links are supported. Please provide Google Drive file URL/ID.', 'warning')
+      return
+    }
+    const modeInput = window.prompt('Import destination: current | new (new subfolder)', 'current')
+    const mode = String(modeInput || '').trim().toLowerCase()
+    if (!['current', 'new'].includes(mode)) {
+      addToast('Choose destination mode: current or new.', 'warning')
+      return
+    }
+    const createSubfolder = mode === 'new'
+    let subfolderName = ''
+    if (createSubfolder) {
+      subfolderName = window.prompt('Enter new subfolder name:', '') || ''
+      if (!subfolderName.trim()) {
+        addToast('Subfolder name is required for mode=new.', 'warning')
+        return
+      }
+    }
+
+    setSectionToolsBusy(true)
+    try {
+      const { data: currentSessionData, error: currentSessionErr } = await supabase.auth.getSession()
+      if (currentSessionErr) throw new Error(currentSessionErr.message || 'Failed to read auth session')
+      if (!currentSessionData?.session?.access_token) {
+        throw new Error('Session not found on this domain. Please sign in again.')
+      }
+
+      const { data: userData, error: userErr } = await supabase.auth.getUser()
+      if (userErr || !userData?.user?.id) {
+        const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession()
+        if (refreshErr || !refreshed?.session?.access_token) {
+          throw new Error(`Session expired: ${String(refreshErr?.message || 'refresh_failed')}. Please sign in again.`)
+        }
+        const { data: userDataAfterRefresh, error: userErrAfterRefresh } = await supabase.auth.getUser()
+        if (userErrAfterRefresh || !userDataAfterRefresh?.user?.id) {
+          throw new Error(`Session is invalid: ${String(userErrAfterRefresh?.message || 'user_not_found_after_refresh')}. Please sign in again.`)
+        }
+      }
+
+      const payload = {
+        import_type: 'file',
+        source_url: sourceUrl.trim(),
+        file_url: sourceUrl.trim(),
+        company_id: selectedCompany.id,
+        section_id: doc.section_id,
+        target_document_id: createSubfolder ? '' : doc.id,
+        create_subfolder: createSubfolder,
+        subfolder_name: subfolderName.trim(),
+      }
+
+      const { data, error } = await invokeGdriveImportWithAuthRetry(payload)
+      if (error || !data?.ok) {
+        const details = error
+          ? await parseFunctionsInvokeError(error)
+          : String(data?.error || data?.message || 'import_failed')
+        if (/invalid jwt/i.test(details)) {
+          throw new Error(`Session token rejected by API: ${details}`)
+        }
+        throw new Error(details)
+      }
+      const imported = Number(data.imported || 0)
+      const scanned = Number(data.scanned || 0)
+      const skipped = Number(data.skipped || 0)
+      const runId = data?.run_id ? ` | run_id=${String(data.run_id)}` : ''
+      if (imported > 0) {
+        const destination = createSubfolder ? `new subfolder "${subfolderName.trim()}"` : `document ${doc.code}`
+        addToast(`Imported ${imported}/${scanned || imported} file(s) from Google Drive to ${destination}.${runId}`, 'success')
+      } else {
+        const firstReason = Array.isArray(data.skipped_samples) && data.skipped_samples[0]?.reason ? String(data.skipped_samples[0].reason) : 'no files imported'
+        addToast(`Imported 0/${scanned} from Google Drive. Skipped: ${skipped}. Reason: ${firstReason}${runId}`, 'warning')
+      }
+      await loadSections()
+      await loadDocuments()
+    } catch (e) {
+      const details = String(e?.message || 'failed')
+      addToast(`Google Drive import failed: ${sanitizeText(details)}`, 'error')
+      if (/session .*sign in again/i.test(details)) {
+        setTimeout(() => {
+          const loginUrl = new URL(`${window.location.origin}/login`)
+          loginUrl.searchParams.set('app', 'audit')
+          window.location.href = loginUrl.toString()
+        }, 500)
+      }
+    }
+    setSectionToolsBusy(false)
   }
 
   return (
@@ -2980,8 +3749,10 @@ function AppContent() {
               <>
                 <button onClick={() => setShowUserManagement(true)} aria-label="Zarządzanie użytkownikami">👥</button>
                 <button onClick={() => setShowAuditLog(true)} aria-label="Dziennik audytu">📜</button>
-                <button onClick={() => setShowSectionManager(true)} aria-label="Zarządzanie sekcjami">📁</button>
               </>
+            )}
+            {(isAdmin || normalizeSide(profile.side) === SIDE_FNU) && (
+              <button onClick={() => setShowSectionManager(true)} aria-label="Zarządzanie sekcjami">📁</button>
             )}
 
             <button onClick={() => supabase.auth.signOut()} aria-label="Wyloguj">🚪</button>
@@ -3025,6 +3796,14 @@ function AppContent() {
                 <span className="name-pl"><SafeText>{activeSection?.name_pl}</SafeText></span>
                 <span className="name-uk"><SafeText>{activeSection?.name_uk}</SafeText></span>
               </h2>
+              <div className="section-actions">
+                <button type="button" className="section-comments-btn" onClick={() => setShowSectionComments(true)}>
+                  💬 Komentarze sekcji / Коментарі секції
+                </button>
+                <button type="button" className="section-comments-btn" onClick={downloadSectionArchive} disabled={sectionToolsBusy || !canViewCurrentSection}>
+                  📦 Download folder (.zip)
+                </button>
+              </div>
             </div>
 
             <div className="context-toolbar">
@@ -3056,7 +3835,7 @@ function AppContent() {
               </div>
             </div>
 
-            {isAdmin && (
+            {canManageCurrentSection && (
               <form className="doc-create-form" onSubmit={createDocument}>
                 <input
                   value={newDocument.code}
@@ -3110,33 +3889,38 @@ function AppContent() {
                         <span className={`side-badge small ${sideClass(doc.responsible.side)}`}>{formatSideLabel(doc.responsible.side)}</span>
                       </span>
                     )}
-                    <button
-                      type="button"
-                      className="doc-chat-btn"
-                      onClick={e => {
-                        e.stopPropagation()
-                        startDiscussionFromDocument(doc)
-                      }}
-                      aria-label={`Omów dokument ${doc.code}`}
-                    >
-                      💬 Omów / Обговорити
-                    </button>
-                    <button
-                      type="button"
-                      className="doc-detail-btn"
-                      onClick={e => {
-                        e.stopPropagation()
-                        setSelectedDocument(doc)
-                      }}
-                      aria-label={`Szczegóły dokumentu ${doc.code}`}
-                    >
-                      🗂️ Pliki
-                    </button>
+                    <div className="doc-row-actions">
+                      <button
+                        type="button"
+                        className="doc-drive-import-btn"
+                        onClick={e => {
+                          e.stopPropagation()
+                          importGoogleDriveForDocument(doc)
+                        }}
+                        disabled={sectionToolsBusy || !canUploadCurrentSection}
+                        aria-label={`Import Google Drive do dokumentu ${doc.code}`}
+                        title="Import Google Drive (file only)"
+                      >
+                        <GoogleDriveIcon className="drive-icon" />
+                        <span>Import</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="doc-detail-btn"
+                        onClick={e => {
+                          e.stopPropagation()
+                          setSelectedDocument(doc)
+                        }}
+                        aria-label={`Szczegóły dokumentu ${doc.code}`}
+                      >
+                        🗂️ Pliki
+                      </button>
+                    </div>
                     <select
                       value={doc.status || 'pending'}
                       onChange={e => { e.stopPropagation(); updateStatus(doc.id, e.target.value) }}
                       onClick={e => e.stopPropagation()}
-                      disabled={!isAdmin}
+                      disabled={!canManageCurrentSection}
                       aria-label={`Status dokumentu ${doc.code}`}
                     >
                       {STATUS_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.pl}</option>)}
@@ -3146,7 +3930,12 @@ function AppContent() {
                     <InlineDocumentDrawer
                       document={doc}
                       onUpdate={loadDocuments}
-                      displayLanguage={resolveLanguageMode(chatLanguageMode, profile?.side)}
+                      displayLanguage={resolveLanguageMode('auto', profile?.side)}
+                      permissions={{
+                        can_comment: canCommentCurrentSection,
+                        can_upload: canUploadCurrentSection,
+                        can_manage: canManageCurrentSection,
+                      }}
                     />
                   )}
                 </div>
@@ -3157,25 +3946,7 @@ function AppContent() {
 
           <aside className="right-rail" aria-label="Panel boczny / Бічна панель">
             <SmartInbox documents={documents} profile={profile} />
-            <ErrorBoundary>
-              <Chat
-                displayLanguageMode={chatLanguageMode}
-                onDisplayLanguageModeChange={setChatLanguageMode}
-                contextHint={
-                  selectedDocument
-                    ? `${selectedDocument.code} ${selectedDocument.name_pl}`
-                    : activeSection
-                      ? `${activeSection.code} ${activeSection.name_pl}`
-                      : ''
-                }
-                contextSeed={chatContextSeed}
-                initialMessageDraft={chatInitialDraft}
-                onDraftConsumed={() => setChatInitialDraft('')}
-                companies={companies}
-                selectedCompanyId={selectedCompany?.id}
-                activeSectionId={activeSection?.id}
-              />
-            </ErrorBoundary>
+            <TaskBoard companyId={selectedCompany?.id} sectionId={activeSection?.id} />
           </aside>
         </div>
 
@@ -3191,7 +3962,23 @@ function AppContent() {
         )}
         {showSectionManager && selectedCompany && (
           <ErrorBoundary>
-            <SectionManager company={selectedCompany} sections={sections} onUpdate={loadSections} onClose={() => setShowSectionManager(false)} />
+            <SectionManager
+              company={selectedCompany}
+              sections={sections}
+              onUpdate={loadSections}
+              onClose={() => setShowSectionManager(false)}
+              canManageMain={isAdmin}
+            />
+          </ErrorBoundary>
+        )}
+        {showSectionComments && activeSection && (
+          <ErrorBoundary>
+            <SectionCommentsModal
+              section={activeSection}
+              onClose={() => setShowSectionComments(false)}
+              displayLanguage={resolveLanguageMode('auto', profile?.side)}
+              canComment={canCommentCurrentSection}
+            />
           </ErrorBoundary>
         )}
         {selectedDocument && (
@@ -3200,7 +3987,12 @@ function AppContent() {
               document={selectedDocument}
               onClose={() => setSelectedDocument(null)}
               onUpdate={loadDocuments}
-              displayLanguage={resolveLanguageMode(chatLanguageMode, profile?.side)}
+              displayLanguage={resolveLanguageMode('auto', profile?.side)}
+              permissions={{
+                can_comment: canCommentCurrentSection,
+                can_upload: canUploadCurrentSection,
+                can_manage: canManageCurrentSection,
+              }}
             />
           </ErrorBoundary>
         )}
