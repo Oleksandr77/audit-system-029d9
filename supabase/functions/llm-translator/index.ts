@@ -50,6 +50,10 @@ function safeTrim(input: string, max = 2000): string {
   return input.replace(/\s+/g, " ").trim().slice(0, max);
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function parseSuggestions(rawText: string): string[] {
   const trimmed = rawText.trim();
 
@@ -148,11 +152,25 @@ async function putCache(
   });
 }
 
-async function callOpenAI(prompt: string, temperature = 0.1): Promise<string> {
+function getOpenAiModelCandidates(): string[] {
+  const primary = String(Deno.env.get("OPENAI_MODEL") || "gpt-4o-mini").trim();
+  const fallbackRaw = String(Deno.env.get("OPENAI_FALLBACK_MODELS") || "gpt-4o-mini").trim();
+  const fallback = fallbackRaw
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean);
+  return Array.from(new Set([primary, ...fallback]));
+}
+
+function isRetryableOpenAiError(message: string): boolean {
+  return /status=429|status=5\d\d|timeout|timed out|network|connection/i.test(message);
+}
+
+async function callOpenAI(prompt: string, temperature = 0.1, modelOverride?: string): Promise<string> {
   const apiKey = Deno.env.get("OPENAI_API_KEY");
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
 
-  const model = Deno.env.get("OPENAI_MODEL") || "gpt-4o-mini";
+  const model = String(modelOverride || Deno.env.get("OPENAI_MODEL") || "gpt-4o-mini").trim();
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -168,14 +186,40 @@ async function callOpenAI(prompt: string, temperature = 0.1): Promise<string> {
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`OpenAI request failed: model=${model} status=${response.status} ${errorText}`);
+    const errorText = safeTrim(await response.text(), 800);
+    throw new Error(`OpenAI request failed: model=${model} status=${response.status} body=${errorText}`);
   }
 
   const data = await response.json();
   const text = extractModelText(data);
   if (!text) throw new Error(`OpenAI returned empty response for model=${model}`);
   return text;
+}
+
+async function callOpenAIWithRetry(prompt: string, temperature = 0.1): Promise<{ text: string; model: string }> {
+  const models = getOpenAiModelCandidates();
+  let lastError: Error | null = null;
+
+  for (const model of models) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const text = await callOpenAI(prompt, temperature, model);
+        return { text, model };
+      } catch (error) {
+        const message = String(error instanceof Error ? error.message : error);
+        lastError = error instanceof Error ? error : new Error(message);
+        const shouldRetry = isRetryableOpenAiError(message) && attempt < 2;
+        if (shouldRetry) {
+          const backoffMs = 300 * Math.pow(2, attempt);
+          await sleep(backoffMs);
+          continue;
+        }
+        break;
+      }
+    }
+  }
+
+  throw new Error(`OpenAI retries exhausted: ${String(lastError?.message || "unknown_error")}`);
 }
 
 async function checkAndLogLlmRateLimit(supabase: SupabaseClientLike, mode: Mode) {
@@ -256,7 +300,8 @@ serve(async (req) => {
         "- Preserve legal/business meaning exactly.\n\n" +
         `Input:\n${text}`;
 
-      const translatedText = safeTrim(await callOpenAI(prompt, 0.05), 3000);
+      const llmResult = await callOpenAIWithRetry(prompt, 0.05);
+      const translatedText = safeTrim(llmResult.text, 3000);
       await putCache(supabase, {
         hash: cacheHash,
         mode: "translate",
@@ -269,7 +314,7 @@ serve(async (req) => {
         translated_text: translatedText || text,
         source_language: source,
         target_language: target,
-        provider: "openai",
+        provider: `openai:${llmResult.model}`,
       });
     }
 
@@ -301,7 +346,8 @@ serve(async (req) => {
       (context ? `Context:\n${context}\n\n` : "\n") +
       `Prefix:\n${text}`;
 
-    const modelText = await callOpenAI(prompt, 0.2);
+    const llmResult = await callOpenAIWithRetry(prompt, 0.2);
+    const modelText = llmResult.text;
     const suggestions = parseSuggestions(modelText);
     await putCache(supabase, {
       hash: cacheHash,
@@ -315,7 +361,7 @@ serve(async (req) => {
     return jsonResponse(200, {
       suggestions: suggestions.slice(0, maxItems),
       language,
-      provider: "openai",
+      provider: `openai:${llmResult.model}`,
     });
   } catch (error) {
     return jsonResponse(500, { error: String(error) });

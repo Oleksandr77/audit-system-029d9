@@ -344,6 +344,10 @@ async function invokeGdriveImportWithAuthRetry(payload) {
   return invokeFunctionWithAuthRetry('gdrive-import', payload)
 }
 
+async function invokeLlmTranslatorWithAuthRetry(payload) {
+  return invokeFunctionWithAuthRetry('llm-translator', payload)
+}
+
 function makeTranslateCacheKey(text, source, target) {
   return `${source}|${target}|${text}`
 }
@@ -402,25 +406,27 @@ async function llmTranslateStrict(text, source, target) {
   for (let attempt = 0; attempt < LLM_MAX_RETRIES; attempt++) {
     try {
       const { data, error } = await callWithTimeout(
-        supabase.functions.invoke('llm-translator', {
-          body: {
-            mode: 'translate',
-            source_language: source,
-            target_language: target,
-            text,
-            strict: true,
-            system_instruction: 'Professional native-level translation for audit/business context. Keep exact meaning, tone, names, dates, numbers and punctuation. No explanations, no notes, output translated text only.'
-          }
+        invokeLlmTranslatorWithAuthRetry({
+          mode: 'translate',
+          source_language: source,
+          target_language: target,
+          text,
+          strict: true,
+          system_instruction: 'Professional native-level translation for audit/business context. Keep exact meaning, tone, names, dates, numbers and punctuation. No explanations, no notes, output translated text only.'
         }),
         TRANSLATION_TIMEOUT_MS
       )
-      if (error) throw error
+      if (error) {
+        const details = await parseFunctionsInvokeError(error)
+        throw new Error(details || String(error.message || 'invoke_failed'))
+      }
       const translated = sanitizeText(data?.translated_text || '')
       if (!translated) throw new Error('empty_translation')
       setCachedValue(translateCache, cacheKey, translated)
       return translated
     } catch (error) {
-      lastError = error
+      const details = await parseFunctionsInvokeError(error).catch(() => null)
+      lastError = new Error(details || String(error?.message || 'unknown_error'))
       if (attempt < LLM_MAX_RETRIES - 1) {
         const backoffMs = 250 * Math.pow(2, attempt)
         await new Promise(resolve => setTimeout(resolve, backoffMs))
@@ -440,20 +446,21 @@ async function llmSuggestCompletions(prefix, language, context = '') {
 
   return await callLlmWithRetry(async () => {
     const { data, error } = await callWithTimeout(
-      supabase.functions.invoke('llm-translator', {
-        body: {
-          mode: 'suggest',
-          language,
-          text: prefix.trim(),
-          context: cleanContext,
-          max_items: MAX_LLM_SUGGESTIONS,
-          strict: true,
-          system_instruction: 'Return 1-3 short continuation options in the same language, based on provided context. No extra commentary.'
-        }
+      invokeLlmTranslatorWithAuthRetry({
+        mode: 'suggest',
+        language,
+        text: prefix.trim(),
+        context: cleanContext,
+        max_items: MAX_LLM_SUGGESTIONS,
+        strict: true,
+        system_instruction: 'Return 1-3 short continuation options in the same language, based on provided context. No extra commentary.'
       }),
       TRANSLATION_TIMEOUT_MS
     )
-    if (error) throw error
+    if (error) {
+      const details = await parseFunctionsInvokeError(error)
+      throw new Error(details || String(error.message || 'invoke_failed'))
+    }
     const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : []
     const finalSuggestions = suggestions.map(s => sanitizeText(String(s))).filter(Boolean).slice(0, MAX_LLM_SUGGESTIONS)
     setCachedValue(suggestCache, cacheKey, finalSuggestions)
