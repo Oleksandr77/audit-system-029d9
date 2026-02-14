@@ -4422,11 +4422,17 @@ function AppContent() {
 
             <NotificationsBell />
 
+            {isAdmin && (
+              <button
+                onClick={() => setShowUserManagement(true)}
+                aria-label="Zarządzanie użytkownikami"
+                title="Zarządzanie użytkownikami"
+              >
+                👥
+              </button>
+            )}
             {isSuperAdmin && (
-              <>
-                <button onClick={() => setShowUserManagement(true)} aria-label="Zarządzanie użytkownikami">👥</button>
-                <button onClick={() => setShowAuditLog(true)} aria-label="Dziennik audytu">📜</button>
-              </>
+              <button onClick={() => setShowAuditLog(true)} aria-label="Dziennik audytu">📜</button>
             )}
             {(isAdmin || normalizeSide(profile.side) === SIDE_FNU) && (
               <button onClick={() => setShowSectionManager(true)} aria-label="Zarządzanie sekcjami">📁</button>
