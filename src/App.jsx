@@ -98,14 +98,23 @@ const FILE_ICONS = {
 }
 
 const COMMENT_AUTHOR_PALETTE = [
-  { bg: '#fff5f7', border: '#f9a8d4', accent: '#9d174d' },
-  { bg: '#f5f3ff', border: '#c4b5fd', accent: '#5b21b6' },
-  { bg: '#eff6ff', border: '#93c5fd', accent: '#1d4ed8' },
-  { bg: '#ecfeff', border: '#67e8f9', accent: '#0e7490' },
-  { bg: '#ecfdf5', border: '#86efac', accent: '#166534' },
-  { bg: '#fffbeb', border: '#fcd34d', accent: '#92400e' },
-  { bg: '#fff7ed', border: '#fdba74', accent: '#9a3412' },
-  { bg: '#f8fafc', border: '#cbd5e1', accent: '#334155' },
+  { bg: '#fff5f7', border: '#f9a8d4', accent: '#9d174d', textBg: '#fde68a', textFg: '#1f2937' },
+  { bg: '#f5f3ff', border: '#c4b5fd', accent: '#5b21b6', textBg: '#ddd6fe', textFg: '#1f2937' },
+  { bg: '#eff6ff', border: '#93c5fd', accent: '#1d4ed8', textBg: '#bfdbfe', textFg: '#1f2937' },
+  { bg: '#ecfeff', border: '#67e8f9', accent: '#0e7490', textBg: '#a5f3fc', textFg: '#1f2937' },
+  { bg: '#ecfdf5', border: '#86efac', accent: '#166534', textBg: '#bbf7d0', textFg: '#1f2937' },
+  { bg: '#fffbeb', border: '#fcd34d', accent: '#92400e', textBg: '#fde68a', textFg: '#1f2937' },
+  { bg: '#fff7ed', border: '#fdba74', accent: '#9a3412', textBg: '#fed7aa', textFg: '#1f2937' },
+  { bg: '#f8fafc', border: '#cbd5e1', accent: '#334155', textBg: '#e2e8f0', textFg: '#1f2937' },
+]
+
+const COMMENT_AUTHOR_DIRECTORY = [
+  { name: 'Bartosz Kowalak', title: 'radca prawny', aliases: ['bartosz kowalak'] },
+  { name: 'prof. Grzegorz Wojtkowiak', title: 'doradca finansowy', aliases: ['prof. grzegorz wojtkowiak', 'grzegorz wojtkowiak'] },
+  { name: 'Łukasz Rozmiarek', title: 'radca prawny', aliases: ['łukasz rozmiarek', 'lukasz rozmiarek'] },
+  { name: 'Michalina Koligot', title: 'adwokat', aliases: ['michalina koligot'] },
+  { name: 'Michał Pruski', title: 'radca prawny', aliases: ['michał pruski', 'michal pruski'] },
+  { name: 'Marzena Buchowiecka', title: 'radca prawny', aliases: ['marzena buchowiecka'] },
 ]
 
 const translateCache = new Map()
@@ -249,6 +258,44 @@ function hashStringToIndex(value, modulo) {
     hash |= 0
   }
   return Math.abs(hash) % Math.max(1, modulo)
+}
+
+function normalizeAuthorLookup(value) {
+  if (!value || typeof value !== 'string') return ''
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9@.\s]/g, ' ')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const COMMENT_AUTHOR_DIRECTORY_INDEX = (() => {
+  const index = new Map()
+  for (const item of COMMENT_AUTHOR_DIRECTORY) {
+    const aliases = Array.isArray(item.aliases) ? item.aliases : []
+    const keys = [item.name, ...aliases]
+      .map(normalizeAuthorLookup)
+      .filter(Boolean)
+    for (const key of keys) index.set(key, item)
+  }
+  return index
+})()
+
+function resolveCommentAuthorDisplay(author) {
+  const nameRaw = String(author?.full_name || '')
+  const emailRaw = String(author?.email || '')
+  const keys = [nameRaw, emailRaw].map(normalizeAuthorLookup).filter(Boolean)
+  for (const key of keys) {
+    const hit = COMMENT_AUTHOR_DIRECTORY_INDEX.get(key)
+    if (hit) {
+      return { name: hit.name, title: hit.title }
+    }
+  }
+  const cleanName = sanitizeText(nameRaw)
+  if (cleanName) return { name: cleanName, title: '' }
+  return { name: 'Użytkownik', title: '' }
 }
 
 function getCommentAuthorTone(authorKey) {
@@ -1509,6 +1556,7 @@ const CommentItem = ({ comment, depth, maxDepth, onReply, canComment }) => {
   const translatedUk = parseMessageContextEnvelope(comment?.translated_uk || '').text
   const renderedPl = translatedPl || (source === 'pl' ? sourceText : sourceText)
   const renderedUk = translatedUk || (source === 'uk' ? sourceText : sourceText)
+  const authorDisplay = resolveCommentAuthorDisplay(comment.author)
   const authorKey = comment.author_id || comment.author?.email || comment.author?.full_name || 'unknown'
   const tone = getCommentAuthorTone(authorKey)
   const commentStyle = {
@@ -1516,6 +1564,8 @@ const CommentItem = ({ comment, depth, maxDepth, onReply, canComment }) => {
     '--comment-bg': tone.bg,
     '--comment-border': tone.border,
     '--comment-accent': tone.accent,
+    '--comment-text-highlight': tone.textBg,
+    '--comment-text-color': tone.textFg,
   }
 
   return (
@@ -1523,8 +1573,9 @@ const CommentItem = ({ comment, depth, maxDepth, onReply, canComment }) => {
       <div className="comment-header">
         <span className="comment-author">
           <span className="comment-author-name" style={{ color: tone.accent }}>
-            <SafeText>{comment.author?.full_name || comment.author?.email}</SafeText>
+            <SafeText>{authorDisplay.name}</SafeText>
           </span>
+          {authorDisplay.title && <span className="comment-author-role"><SafeText>{authorDisplay.title}</SafeText></span>}
           <span className={`side-badge ${sideClass(comment.author?.side)}`}>{formatSideLabel(comment.author?.side)}</span>
         </span>
         <time dateTime={comment.created_at}>{new Date(comment.created_at).toLocaleString()}</time>
@@ -1534,13 +1585,17 @@ const CommentItem = ({ comment, depth, maxDepth, onReply, canComment }) => {
           <span className="comment-lang comment-lang-flag" aria-label="Polski">
             <span className="comment-flag" aria-hidden="true">🇵🇱</span>
           </span>
-          <p className="comment-content compact"><SafeText>{renderedPl}</SafeText></p>
+          <p className="comment-content compact">
+            <span className="comment-text-highlight"><SafeText>{renderedPl}</SafeText></span>
+          </p>
         </div>
         <div className="comment-line">
           <span className="comment-lang comment-lang-flag" aria-label="Українська">
             <span className="comment-flag" aria-hidden="true">🇺🇦</span>
           </span>
-          <p className="comment-content compact"><SafeText>{renderedUk}</SafeText></p>
+          <p className="comment-content compact">
+            <span className="comment-text-highlight"><SafeText>{renderedUk}</SafeText></span>
+          </p>
         </div>
       </div>
       <div className="comment-actions">

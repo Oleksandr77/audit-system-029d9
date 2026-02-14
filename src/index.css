@@ -2204,6 +2204,7 @@ body {
   font-weight: 500;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
@@ -2213,6 +2214,15 @@ body {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.58);
   border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.comment-author-role {
+  font-size: 0.72rem;
+  color: #334155;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(15, 23, 42, 0.12);
 }
 
 .comment-header time { color: var(--text-muted); }
@@ -2251,6 +2261,15 @@ body {
   font-size: 0.82rem;
   line-height: 1.35;
   margin-bottom: 0;
+}
+.comment-text-highlight {
+  display: inline;
+  padding: 0.05rem 0.32rem;
+  border-radius: 0.28rem;
+  background: var(--comment-text-highlight, #fde68a);
+  color: var(--comment-text-color, #1f2937);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 .comment-meta {
   font-size: 0.72rem;
