@@ -1450,6 +1450,7 @@ function Comments({ entityType = 'document', entityId, parentDocumentId = null, 
   const [replyTo, setReplyTo] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [channel, setChannel] = useState('fnu_internal')
+  const [useFilePrefixFallback, setUseFilePrefixFallback] = useState(false)
   const addToast = useToast()
   const profile = useProfile()
   const safeSetState = useSafeAsync()
@@ -1463,16 +1464,51 @@ function Comments({ entityType = 'document', entityId, parentDocumentId = null, 
     : entityType === 'file'
       ? 'file_id'
       : 'document_id'
+  const fileCommentPrefix = entityType === 'file' && entityId ? `[file:${entityId}] ` : ''
+  const stripFilePrefix = (text) => {
+    if (typeof text !== 'string' || !fileCommentPrefix) return text
+    return text.startsWith(fileCommentPrefix) ? text.slice(fileCommentPrefix.length) : text
+  }
 
   const loadComments = useCallback(async () => {
     if (!entityId) return
-    const { data, error } = await supabase
+    const selectCols = 'id, author_id, content, source_language, translated_pl, translated_uk, translation_provider, created_at, updated_at, parent_comment_id, visible_to_sides, comment_scope, author:author_id(full_name, email, side)'
+    let data = []
+    let error = null
+
+    const primaryQuery = await supabase
       .from('comments')
-      .select('id, author_id, content, source_language, translated_pl, translated_uk, translation_provider, created_at, updated_at, parent_comment_id, visible_to_sides, comment_scope, author:author_id(full_name, email, side)')
+      .select(selectCols)
       .eq(entityColumn, entityId)
       .order('created_at')
+    data = primaryQuery.data || []
+    error = primaryQuery.error
+
+    if (error && entityType === 'file' && parentDocumentId) {
+      const details = `${String(error.message || '')} ${String(error.details || '')} ${String(error.hint || '')}`.toLowerCase()
+      const canUseFallback = /file_id|schema cache|column/i.test(details)
+      if (canUseFallback) {
+        const fallback = await supabase
+          .from('comments')
+          .select(selectCols)
+          .eq('document_id', parentDocumentId)
+          .ilike('content', `[file:${entityId}]%`)
+          .order('created_at')
+        data = (fallback.data || []).map(c => ({
+          ...c,
+          content: stripFilePrefix(c.content),
+          translated_pl: stripFilePrefix(c.translated_pl),
+          translated_uk: stripFilePrefix(c.translated_uk),
+        }))
+        error = fallback.error
+        setUseFilePrefixFallback(!fallback.error)
+      }
+    } else if (entityType === 'file') {
+      setUseFilePrefixFallback(false)
+    }
+
     if (error) {
-      addToast('Comments schema is outdated. Run latest SQL migration.', 'error')
+      addToast(`Comments load error: ${sanitizeText(error.message || error.details || 'query_failed')}`, 'error')
       return
     }
 
@@ -1482,7 +1518,7 @@ function Comments({ entityType = 'document', entityId, parentDocumentId = null, 
       return normalizeSide(profile?.side) === SIDE_FNU
     })
     safeSetState(setComments)(filtered)
-  }, [entityId, entityColumn, profile, safeSetState, canUseAuditorChannel, addToast])
+  }, [entityId, entityColumn, entityType, parentDocumentId, profile, safeSetState, canUseAuditorChannel, addToast, fileCommentPrefix])
 
   useEffect(() => { if (canView) loadComments() }, [canView, loadComments])
   useEffect(() => {
@@ -1523,8 +1559,18 @@ function Comments({ entityType = 'document', entityId, parentDocumentId = null, 
       comment_scope: scope,
       visible_to_sides: scope === 'auditor_channel' ? [SIDE_AUDITOR] : [SIDE_FNU]
     }
-    if (entityType === 'file' && parentDocumentId) payload.document_id = parentDocumentId
-    payload[entityColumn] = entityId
+    if (entityType === 'file' && useFilePrefixFallback) {
+      if (!parentDocumentId) {
+        addToast('File comments fallback requires document context.', 'error')
+        setSubmitting(false)
+        return
+      }
+      payload.document_id = parentDocumentId
+      payload.content = `${fileCommentPrefix}${cleanContent}`
+    } else {
+      if (entityType === 'file' && parentDocumentId) payload.document_id = parentDocumentId
+      payload[entityColumn] = entityId
+    }
 
     const { data, error } = await supabase.from('comments').insert(payload).select().single()
 
